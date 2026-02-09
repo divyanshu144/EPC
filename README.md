@@ -1,6 +1,6 @@
 ## EW Housing Energy Impact
 
-Portfolio-grade, reproducible analysis of UK EPC data (South West England, 2008–2025).
+reproducible analysis of UK EPC data (South West England, 2008–2025).
 This repo turns the dissertation into a **clean pipeline** with validation, reproducibility,
 and fully scripted outputs.
 
