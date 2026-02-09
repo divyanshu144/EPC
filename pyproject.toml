@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ew-housing-energy-impact"
+version = "0.1.0"
+description = "Reproducible EPC analysis pipeline for UK housing energy performance."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ewhei = "ew_housing_energy_impact.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

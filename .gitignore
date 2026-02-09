@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+*.ipynb_checkpoints/
+.venv*/
+.env
+
+# data & outputs
+data/**
+!data/.gitkeep
+reports/**
+!reports/.gitkeep
+logs/**
+!logs/.gitkeep
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

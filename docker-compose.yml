@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  notebook:
+    build: .
+    container_name: ew-notebook
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-lab}
+      - EPC_EMAIL=${EPC_EMAIL}
+      - EPC_API_KEY=${EPC_API_KEY}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./notebooks:/work/notebooks
+      - ./scripts:/work/scripts
+      - ./data:/work/data
+      - ./reports:/work/reports
+      - ./logs:/work/logs
+      - ./.env:/work/.env:ro
+    # uncomment on Apple Silicon if you hit binary issues
+    # platform: linux/amd64
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ewhei-api
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/processed:/app/data/processed
+      - ./reports/artifacts:/app/reports/artifacts
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: ewhei-streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data/processed:/app/data/processed
+      - ./reports/artifacts:/app/reports/artifacts

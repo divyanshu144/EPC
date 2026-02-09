@@ -1,0 +1,2 @@
+[console_scripts]
+ewhei = ew_housing_energy_impact.cli:main

@@ -1,0 +1,26 @@
+# core
+pandas==2.2.2
+numpy==2.1.2
+pyarrow==18.1.0
+python-dotenv==1.0.1
+requests==2.32.3
+tqdm==4.66.5
+
+# viz + analysis
+matplotlib==3.9.2
+seaborn==0.13.2
+scikit-learn==1.5.2
+statsmodels==0.14.2
+shap==0.46.0
+linearmodels==7.0
+xgboost==3.1.2
+pytest==8.3.3
+joblib==1.4.2
+streamlit==1.41.1
+fastapi==0.115.6
+uvicorn==0.30.6
+pydantic==2.10.3
+
+# notebooks
+jupyterlab==4.2.5
+ipykernel==6.29.5
