@@ -11,7 +11,7 @@ and fully scripted outputs.
 - Data validation + manifest/provenance artifacts
 - Tests for core logic
 
-**Architecture (high level)**
+**Architecture **
 ```mermaid
 flowchart LR
   A[EPC API bulk zips] --> B[Merge core CSV]
