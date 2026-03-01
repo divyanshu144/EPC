@@ -17,15 +17,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import EPC_CLEAN_SW_DIR
+from config import EPC_CLEAN_SW_DIR, REGISTRY_PATH
 from scripts.pipeline.policy import POLICY_ORDER, policy_period
 from ew_housing_energy_impact.registry import register_artifact
 
 
 IN_CSV = EPC_CLEAN_SW_DIR / "ew_epc_core_clean_sw.csv"
 OUT_IMPUTED = EPC_CLEAN_SW_DIR / "ew_epc_core_clean_sw_imputed.csv"
-OUT_WITH_POLICY = EPC_CLEAN_SW_DIR / "ew_epc_core_clean_sw_with_policy.csv"
-REGISTRY_PATH = EPC_CLEAN_SW_DIR.parent.parent.parent / "reports" / "artifacts" / "registry.jsonl"
 
 
 def load_clean() -> pd.DataFrame:
@@ -76,6 +74,45 @@ def impute_missing(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_new_build_share(df: pd.DataFrame) -> pd.DataFrame:
+    """Add NEW_BUILD_SHARE: fraction of EPC lodgements that are new-build per LA-year.
+
+    Why this matters
+    ----------------
+    EPC lodgements are event-driven (sale, rental, construction). In years with
+    high new-build activity, more high-efficiency dwellings enter the dataset,
+    mechanically raising the mean EPC score independent of retrofit policy.
+    Including NEW_BUILD_SHARE as a covariate in the fixed-effects models isolates
+    genuine within-LA efficiency improvements from this compositional shift.
+
+    Computation
+    -----------
+    TRANSACTION_TYPE == 'new dwelling' flags new builds. The share is computed
+    at the (LOCAL_AUTHORITY, YEAR) level and merged back to each individual
+    record so the regression can use it as a continuous control.
+    """
+    if "TRANSACTION_TYPE" not in df.columns:
+        df["NEW_BUILD_SHARE"] = np.nan
+        return df
+
+    df["_is_new_build"] = (
+        df["TRANSACTION_TYPE"]
+        .str.strip()
+        .str.lower()
+        .eq("new dwelling")
+        .astype(int)
+    )
+    nb_share = (
+        df.groupby(["LOCAL_AUTHORITY", "YEAR"], as_index=False)["_is_new_build"]
+        .mean()
+        .rename(columns={"_is_new_build": "NEW_BUILD_SHARE"})
+    )
+    df = df.drop(columns=["_is_new_build"]).merge(
+        nb_share, on=["LOCAL_AUTHORITY", "YEAR"], how="left"
+    )
+    return df
+
+
 def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_year(df)
 
@@ -95,6 +132,10 @@ def add_derived(df: pd.DataFrame) -> pd.DataFrame:
         categories=POLICY_ORDER,
         ordered=True,
     )
+
+    # New-build share covariate (controls for compositional shift)
+    df = add_new_build_share(df)
+
     return df
 
 
@@ -105,13 +146,10 @@ def main() -> None:
 
     OUT_IMPUTED.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(OUT_IMPUTED, index=False)
-    df.to_csv(OUT_WITH_POLICY, index=False)
     register_artifact(REGISTRY_PATH, "dataset", OUT_IMPUTED, {"stage": "imputed"})
-    register_artifact(REGISTRY_PATH, "dataset", OUT_WITH_POLICY, {"stage": "with_policy"})
 
     print("✓ Feature build complete.")
     print(f"Saved: {OUT_IMPUTED}")
-    print(f"Saved: {OUT_WITH_POLICY}")
 
 
 if __name__ == "__main__":

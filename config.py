@@ -15,6 +15,10 @@ EPC_MERGED_CSV = ROOT / "data" / "processed" / "ew_epc_core.csv"
 # Cleaned South West outputs directory (CSV and derived files)
 EPC_CLEAN_SW_DIR = ROOT / "data" / "processed" / "ew_epc_core_clean_sw"
 
+# Artifacts
+ARTIFACTS_DIR = ROOT / "reports" / "artifacts"
+REGISTRY_PATH = ARTIFACTS_DIR / "registry.jsonl"
+
 # South West LA list
 SOUTH_WEST_LAS = [
     "Bath and North East Somerset",

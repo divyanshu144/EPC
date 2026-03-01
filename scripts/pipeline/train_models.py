@@ -38,7 +38,7 @@ import shap
 from xgboost import XGBClassifier
 import joblib
 
-from config import ROOT
+from config import ROOT, REGISTRY_PATH
 from ew_housing_energy_impact.registry import register_artifact
 
 
@@ -48,7 +48,6 @@ TABLE_DIR = ROOT / "reports" / "tables"
 ARTIFACT_DIR = ROOT / "reports" / "artifacts"
 MODEL_DIR = ARTIFACT_DIR / "models"
 MODEL_CARD_DIR = ROOT / "reports" / "model_cards"
-REGISTRY_PATH = ARTIFACT_DIR / "registry.jsonl"
 
 RANDOM_STATE = 42
 TARGET_N = 200_000
@@ -67,16 +66,52 @@ def load_data() -> pd.DataFrame:
     return df
 
 
-def sample_data(df: pd.DataFrame) -> pd.DataFrame:
-    n_rows = len(df)
-    sample_size = min(TARGET_N, n_rows)
-    df_sample, _ = train_test_split(
-        df,
-        train_size=sample_size,
-        stratify=df["BELOW_C_INT"],
-        random_state=RANDOM_STATE,
-    )
-    return df_sample.reset_index(drop=True)
+def sample_data(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split by BUILDING_REFERENCE_NUMBER to prevent leakage across train/test.
+
+    The same physical dwelling can have multiple EPC certificates across years.
+    A row-level random split would allow the same property to appear in both
+    train and test sets, inflating evaluation metrics. Splitting on the property
+    identifier ensures the test set contains only unseen properties.
+
+    Returns (train_df, test_df) where test is ~20% of unique properties.
+    """
+    if "BUILDING_REFERENCE_NUMBER" not in df.columns:
+        # Fallback for datasets without the ID column: row-level split with warning.
+        import warnings
+        warnings.warn(
+            "BUILDING_REFERENCE_NUMBER not found — falling back to row-level split. "
+            "Test metrics may be optimistic if properties repeat across years.",
+            UserWarning,
+            stacklevel=2,
+        )
+        train_df, test_df = train_test_split(
+            df, test_size=0.2, stratify=df["BELOW_C_INT"], random_state=RANDOM_STATE
+        )
+        return train_df.reset_index(drop=True), test_df.reset_index(drop=True)
+
+    # Property-level split: 80% of unique properties → train, 20% → test.
+    unique_props = df["BUILDING_REFERENCE_NUMBER"].dropna().unique()
+    rng = np.random.default_rng(RANDOM_STATE)
+    rng.shuffle(unique_props)
+    n_test = max(1, int(len(unique_props) * 0.2))
+    test_props = set(unique_props[:n_test])
+
+    test_mask = df["BUILDING_REFERENCE_NUMBER"].isin(test_props)
+    train_df = df[~test_mask].reset_index(drop=True)
+    test_df = df[test_mask].reset_index(drop=True)
+
+    # Down-sample train to TARGET_N if needed (preserve BELOW_C balance).
+    if len(train_df) > TARGET_N:
+        train_df, _ = train_test_split(
+            train_df,
+            train_size=TARGET_N,
+            stratify=train_df["BELOW_C_INT"],
+            random_state=RANDOM_STATE,
+        )
+        train_df = train_df.reset_index(drop=True)
+
+    return train_df, test_df
 
 
 def build_preprocessor(cat_features: list[str], num_features: list[str]) -> ColumnTransformer:
@@ -117,7 +152,7 @@ def evaluate_classifier(name, model, X_test, y_test):
 
 
 def main() -> None:
-    df = sample_data(load_data())
+    train_df, test_df = sample_data(load_data())
 
     feature_cols = [
         "PROPERTY_TYPE",
@@ -129,20 +164,16 @@ def main() -> None:
     target_reg = "CURRENT_ENERGY_EFFICIENCY"
     target_clf = "BELOW_C_INT"
 
-    df_mod = df.dropna(subset=feature_cols + [target_reg, target_clf]).copy()
+    train_df = train_df.dropna(subset=feature_cols + [target_reg, target_clf])
+    test_df = test_df.dropna(subset=feature_cols + [target_reg, target_clf])
 
-    X = df_mod[feature_cols]
-    y_reg = df_mod[target_reg]
-    y_clf = df_mod[target_clf]
+    X_train = train_df[feature_cols]
+    y_reg_train = train_df[target_reg]
+    y_clf_train = train_df[target_clf]
 
-    X_train, X_test, y_reg_train, y_reg_test, y_clf_train, y_clf_test = train_test_split(
-        X,
-        y_reg,
-        y_clf,
-        test_size=0.2,
-        random_state=RANDOM_STATE,
-        stratify=y_clf,
-    )
+    X_test = test_df[feature_cols]
+    y_reg_test = test_df[target_reg]
+    y_clf_test = test_df[target_clf]
 
     cat_features = ["PROPERTY_TYPE", "AGE_BAND_STD", "TENURE_STD", "MAIN_FUEL_STD"]
     num_features = ["LOG_FLOOR_AREA"]

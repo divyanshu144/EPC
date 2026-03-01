@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
+import pandas as pd
 
 from ew_housing_energy_impact.logging_utils import setup_logger
 from ew_housing_energy_impact.paths import repo_root
 from ew_housing_energy_impact.validation import validate_imputed_csv, write_validation_report
 from ew_housing_energy_impact.manifest import write_manifest
-
-# Ensure repo root is on sys.path for scripts.* imports
-root = repo_root()
-if str(root) not in sys.path:
-    sys.path.insert(0, str(root))
+from ew_housing_energy_impact.registry import register_artifact
+from config import REGISTRY_PATH, ARTIFACTS_DIR
 
 def cmd_run_all() -> None:
     from scripts.pipeline import (
@@ -37,11 +33,10 @@ def cmd_run_all() -> None:
 def cmd_validate() -> None:
     root = repo_root()
     data_path = root / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
-    report_path = root / "reports" / "artifacts" / "validation_report.json"
+    report_path = ARTIFACTS_DIR / "validation_report.json"
     result = validate_imputed_csv(data_path)
     write_validation_report(result, report_path)
-    from ew_housing_energy_impact.registry import register_artifact
-    register_artifact(report_path.parent / "registry.jsonl", "validation_report", report_path, {"ok": result.ok})
+    register_artifact(REGISTRY_PATH, "validation_report", report_path, {"ok": result.ok})
     logger = setup_logger()
     if result.ok:
         logger.info("Validation OK. Report written to %s", report_path)
@@ -52,13 +47,10 @@ def cmd_validate() -> None:
 def cmd_manifest() -> None:
     root = repo_root()
     data_path = root / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
-    out_path = root / "reports" / "artifacts" / "data_manifest.json"
-    import pandas as pd
-
+    out_path = ARTIFACTS_DIR / "data_manifest.json"
     df = pd.read_csv(data_path)
     write_manifest(df, out_path)
-    from ew_housing_energy_impact.registry import register_artifact
-    register_artifact(out_path.parent / "registry.jsonl", "manifest", out_path, {"type": "data_manifest"})
+    register_artifact(REGISTRY_PATH, "manifest", out_path, {"type": "data_manifest"})
     logger = setup_logger()
     logger.info("Manifest written to %s", out_path)
 
@@ -68,7 +60,13 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("run-all", help="Run the full report pipeline")
-    sub.add_parser("download", help="Download and merge EPC data")
+    dl = sub.add_parser("download", help="Download and merge EPC data")
+    dl.add_argument(
+        "--mode",
+        choices=["la", "year"],
+        default="la",
+        help="'la' (default): download only SW LA zips (~200 MB). 'year': full annual E&W bulk zips (~6.7 GB).",
+    )
     sub.add_parser("clean", help="Clean EPC data for South West")
     sub.add_parser("features", help="Build features and policy periods")
     sub.add_parser("eda", help="Generate EDA figures and tables")
@@ -84,7 +82,7 @@ def main() -> None:
         cmd_run_all()
     elif args.cmd == "download":
         from scripts.pipeline import epc_download_merge_fast
-        epc_download_merge_fast.main()
+        epc_download_merge_fast.main(mode=args.mode)
     elif args.cmd == "clean":
         from scripts.pipeline import clean_epc
         clean_epc.main()

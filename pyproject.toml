@@ -8,7 +8,26 @@ version = "0.1.0"
 description = "Reproducible EPC analysis pipeline for UK housing energy performance."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "pyarrow>=18.0",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "tqdm>=4.66",
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    "scikit-learn>=1.5",
+    "statsmodels>=0.14",
+    "shap>=0.46",
+    "linearmodels>=7.0",
+    "xgboost>=3.0",
+    "joblib>=1.4",
+    "streamlit>=1.41",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.10",
+]
 
 [project.scripts]
 ewhei = "ew_housing_energy_impact.cli:main"

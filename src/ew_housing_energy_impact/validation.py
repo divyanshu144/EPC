@@ -5,15 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import json
-import sys
 import pandas as pd
-
-from ew_housing_energy_impact.paths import repo_root
-
-# Ensure repo root is on sys.path for scripts.* imports when using the CLI
-root = repo_root()
-if str(root) not in sys.path:
-    sys.path.insert(0, str(root))
 
 from scripts.pipeline.schemas import CLEAN_KEEP_COLS
 
