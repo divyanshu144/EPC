@@ -68,6 +68,19 @@ _CONTROLS = (
 # Main specification: five policy-period dummies (Pre-GreenDeal = reference).
 BASE_RHS = "C(POLICY_PERIOD)" + _CONTROLS
 
+# Raw columns referenced by BASE_RHS. Used by the wild cluster bootstrap to
+# reconstruct, positionally, the rows PanelOLS keeps (it drops any row with NaN
+# in a model term). Keep in sync with _CONTROLS / BASE_RHS above.
+_BASE_RHS_COLS: list[str] = [
+    "POLICY_PERIOD",
+    "PROPERTY_TYPE",
+    "AGE_BAND_STD",
+    "TENURE_STD",
+    "MAIN_FUEL_STD",
+    "LOG_FLOOR_AREA",
+    "NEW_BUILD_SHARE",
+]
+
 # Event-study specification: year dummies (2008 = reference, dropped by patsy).
 # Produces one coefficient per year, showing exactly when trends shift.
 EVENT_STUDY_RHS = "C(YEAR)" + _CONTROLS
@@ -120,65 +133,102 @@ def wild_cluster_bootstrap_pvalues(
 ) -> pd.Series:
     """Wild cluster bootstrap p-values (Rademacher weights).
 
-    Valid for small numbers of clusters (Cameron, Gelbach & Miller 2008).
-    Returns a Series of p-values indexed by parameter name, for terms
-    containing 'POLICY_PERIOD'.
+    Valid for small numbers of clusters (Cameron, Gelbach & Miller 2008;
+    MacKinnon & Webb 2017). Returns a Series of p-values indexed by parameter
+    name, for terms containing 'POLICY_PERIOD'.
 
-    Steps:
-      1. Fit the FE model once to get residuals and fitted values.
-      2. In each bootstrap iteration, multiply residuals by a cluster-level
-         Rademacher weight (+1 or -1, one per LA), refit on the perturbed
-         outcome, and record the t-statistics.
-      3. The WCB p-value for each coefficient is the share of bootstrap
-         t-statistics whose absolute value exceeds the observed |t|.
+    Method
+    ------
+    1. Fit the FE model once to obtain fitted values, residuals and the
+       full-sample coefficient estimates.
+    2. In each bootstrap iteration draw one Rademacher weight (+1/-1) *per
+       cluster* (same sign for every observation in an LA), build the perturbed
+       outcome ``y* = fitted + weight * residual``, and refit.
+    3. Recentre the bootstrap t-statistic on the full-sample estimate,
+       ``t* = (beta*_b - beta_hat) / se*_b``. Recentring is essential: without
+       it the bootstrap statistics cluster around the observed estimate rather
+       than the null, and the resulting p-values are biased toward ~0.5. (This
+       is the WCB-U / restricted-recentred variant; it imposes the null on the
+       statistic, not on the resampling DGP.)
+    4. The p-value uses the finite-sample correction
+       ``(1 + #{|t*| >= |t_obs|}) / (n_boot + 1)`` so it can never be exactly 0.
+
+    Robustness: linearmodels returns ``fitted_values`` as an (n x 1) DataFrame
+    and ``resids`` as a Series, and PanelOLS drops rows with NaN in any RHS term
+    (e.g. NEW_BUILD_SHARE / YEAR). Both are therefore aligned to the *estimation*
+    index, which can be shorter than ``df_panel``; we convert to 1-D arrays and
+    align cluster weights to that estimation index to avoid shape errors.
     """
     rng = np.random.default_rng(seed)
-    las = df_panel.index.get_level_values("LOCAL_AUTHORITY")
-    unique_las = las.unique()
+
+    # Fit baseline model.
+    res = fit_fe(df_panel, dep_var)
+
+    # 1-D arrays aligned to the estimation sample (handles DataFrame fitted
+    # values and any NaN-dropped rows).
+    fitted_arr = res.fitted_values.iloc[:, 0].to_numpy()
+    resid_arr = res.resids.to_numpy()
+
+    # Reconstruct, positionally, the rows PanelOLS used. The panel index has
+    # duplicate (LA, YEAR) pairs, so label-based assignment is impossible; we
+    # work with a boolean row mask instead. PanelOLS drops rows with NaN in any
+    # model term, so the kept rows are exactly the non-NaN rows of _BASE_RHS_COLS
+    # + dep_var.
+    est_cols = [c for c in _BASE_RHS_COLS + [dep_var] if c in df_panel.columns]
+    est_mask = df_panel[est_cols].notna().all(axis=1).to_numpy()
+    if int(est_mask.sum()) != resid_arr.shape[0]:
+        raise RuntimeError(
+            f"WCB could not reconstruct the estimation sample for {dep_var}: "
+            f"{int(est_mask.sum())} non-NaN rows vs {resid_arr.shape[0]} residuals. "
+            "Check that _BASE_RHS_COLS matches BASE_RHS."
+        )
+
+    # Cluster index for the kept rows, factorised once for fast weight gather.
+    las_used = df_panel.index.get_level_values("LOCAL_AUTHORITY").to_numpy()[est_mask]
+    cluster_codes, unique_las = pd.factorize(las_used)
     n_clusters = len(unique_las)
 
-    # Fit baseline model
-    res = fit_fe(df_panel, dep_var)
-    residuals = res.resids
-    fitted = res.fitted_values
-
-    # Observed t-statistics for policy period terms
+    # Observed t-statistics (H0: beta = 0) for policy-period terms.
     policy_terms = [p for p in res.params.index if "POLICY_PERIOD" in p]
-    t_obs = res.tstats[policy_terms].abs()
+    beta_hat = res.params
+    t_obs = (res.params[policy_terms] / res.std_errors[policy_terms]).abs()
 
     t_boot = {term: [] for term in policy_terms}
 
+    # Reuse a single working frame; only the dependent column is overwritten
+    # each iteration (avoids copying the full ~1.8M-row panel B times).
+    df_boot = df_panel.copy()
+    dep_full = df_panel[dep_var].to_numpy(dtype=float)
+
     for _ in range(B):
-        # Draw one Rademacher weight per cluster
-        weights = rng.choice([-1.0, 1.0], size=n_clusters)
-        la_weight = pd.Series(
-            {la: w for la, w in zip(unique_las, weights)}, name="weight"
-        )
-        obs_weights = las.map(la_weight)
-
-        # Perturbed outcome = fitted + weight * residual
-        y_star = fitted + obs_weights.values * residuals.values
-        y_star = pd.Series(y_star, index=df_panel.index, name=dep_var)
-
-        df_boot = df_panel.copy()
-        df_boot[dep_var] = y_star
-
         try:
+            # One Rademacher weight per cluster, broadcast to its observations.
+            weights = rng.choice([-1.0, 1.0], size=n_clusters)
+            obs_weights = weights[cluster_codes]
+
+            # Perturbed outcome: overwrite kept rows positionally; dropped rows
+            # keep their (NaN) value and are dropped again on refit.
+            dep_boot = dep_full.copy()
+            dep_boot[est_mask] = fitted_arr + obs_weights * resid_arr
+            df_boot[dep_var] = dep_boot
+
             res_b = fit_fe(df_boot, dep_var)
             for term in policy_terms:
-                if term in res_b.tstats.index:
-                    t_boot[term].append(abs(res_b.tstats[term]))
+                if term in res_b.params.index:
+                    t_star = (res_b.params[term] - beta_hat[term]) / res_b.std_errors[term]
+                    t_boot[term].append(abs(t_star))
         except Exception:
+            # Skip a degenerate refit (e.g. rank deficiency under perturbation);
+            # the p-value below uses the count of successful replications.
             continue
 
-    # p-value = proportion of |t_boot| >= |t_obs|
     pvals = {}
     for term in policy_terms:
-        boot_arr = np.array(t_boot[term])
-        if len(boot_arr) == 0:
+        boot_arr = np.asarray(t_boot[term], dtype=float)
+        if boot_arr.size == 0:
             pvals[term] = np.nan
         else:
-            pvals[term] = (boot_arr >= t_obs[term]).mean()
+            pvals[term] = (1 + np.sum(boot_arr >= t_obs[term])) / (boot_arr.size + 1)
 
     return pd.Series(pvals, name="wcb_pvalue")
 
@@ -190,6 +240,9 @@ def extract_policy_effects(res, wcb_pvalues: pd.Series | None = None, prefix="C(
     clustered_pvals = res.pvalues.filter(like=prefix)
     out = pd.concat([params, se, clustered_pvals], axis=1).reset_index()
     out.columns = ["term", "coef", "se", "clustered_pval"]
+    # lower_95/upper_95 are asymptotic clustered intervals (±1.96·SE) reported
+    # for comparability and visualisation. With 14 clusters they are unreliable;
+    # the wcb_pval column (wild cluster bootstrap) is the primary inference.
     out["lower_95"] = out["coef"] - 1.96 * out["se"]
     out["upper_95"] = out["coef"] + 1.96 * out["se"]
 
@@ -240,11 +293,17 @@ def fit_event_study(df_panel: pd.DataFrame, dep_var: str):
     return model.fit(cov_type="clustered", clusters=clusters)
 
 
-def extract_event_study(res) -> pd.DataFrame:
+def extract_event_study(res, ref_year: int) -> pd.DataFrame:
     """Extract year coefficients and 95% CIs from an event-study result.
 
-    Also prepends the reference year (2008) with coefficient = 0 so the plot
-    anchors correctly at the baseline.
+    Prepends the reference (omitted) year with coefficient = 0 so the plot
+    anchors at the true baseline. ``ref_year`` must be the year patsy actually
+    dropped — i.e. the minimum YEAR in the estimation panel — not a hardcoded
+    value, otherwise every plotted coefficient is shifted relative to a baseline
+    that may not exist in the data.
+
+    Note: lower_95/upper_95 are asymptotic clustered intervals for visual
+    reference only; formal inference uses the wild cluster bootstrap.
 
     Returns a DataFrame with columns: year, coef, se, lower_95, upper_95.
     """
@@ -267,11 +326,14 @@ def extract_event_study(res) -> pd.DataFrame:
     out["year"] = out["term"].apply(_term_to_year)
     out = out.drop(columns=["term"]).sort_values("year").reset_index(drop=True)
 
-    # Prepend reference year (2008) at zero
-    ref_row = pd.DataFrame([{
-        "year": 2008, "coef": 0.0, "se": 0.0, "lower_95": 0.0, "upper_95": 0.0
-    }])
-    out = pd.concat([ref_row, out], ignore_index=True).sort_values("year").reset_index(drop=True)
+    # Prepend the actual reference year at zero (skip if it somehow appears as a
+    # fitted term, to avoid double-counting).
+    if ref_year not in set(out["year"]):
+        ref_row = pd.DataFrame([{
+            "year": ref_year, "coef": 0.0, "se": 0.0, "lower_95": 0.0, "upper_95": 0.0
+        }])
+        out = pd.concat([ref_row, out], ignore_index=True)
+    out = out.sort_values("year").reset_index(drop=True)
     return out
 
 
@@ -304,8 +366,13 @@ def plot_event_study(
     lo = df_es["lower_95"].values
     hi = df_es["upper_95"].values
 
-    # CI ribbon
-    ax.fill_between(years, lo, hi, alpha=0.18, color="#2C7BB6", label="95% CI")
+    # CI ribbon. These are asymptotic clustered intervals (±1.96·SE) shown for
+    # visual reference only — with 14 clusters they are unreliable, so formal
+    # inference relies on the wild cluster bootstrap p-values, not this band.
+    ax.fill_between(
+        years, lo, hi, alpha=0.18, color="#2C7BB6",
+        label="95% CI (asymptotic, clustered)",
+    )
 
     # Point estimates connected by line
     ax.plot(years, coefs, color="#2C7BB6", linewidth=1.4, zorder=3)
@@ -363,6 +430,14 @@ def plot_event_study(
     ax.set_ylabel(y_label, fontsize=10)
     ax.set_xticks(range(int(years.min()), int(years.max()) + 1, 2))
     ax.tick_params(axis="x", labelsize=9)
+    ax.legend(loc="best", frameon=False, fontsize=8)
+
+    fig.text(
+        0.01, 0.005,
+        "CI band: asymptotic clustered ±1.96·SE (visual reference only). "
+        "Formal inference uses wild cluster bootstrap p-values.",
+        fontsize=7, color="#777777",
+    )
 
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -390,6 +465,13 @@ def plot_policy_effects(df_eff: pd.DataFrame, title: str, x_label: str, out_path
     ax.set_title(title)
     ax.set_xlabel(x_label)
     ax.set_ylabel("Policy period")
+    fig = plt.gcf()
+    fig.text(
+        0.01, 0.005,
+        "Error bars: asymptotic clustered ±1.96·SE (visual reference only). "
+        "Formal inference uses wild cluster bootstrap p-values (wcb_pval).",
+        fontsize=7, color="#777777",
+    )
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=200)
@@ -546,15 +628,17 @@ def main() -> None:
         out_path=FIG_DIR / "figure_6_2_policy_below_c.png",
     )
 
-    # Event study: year-by-year coefficients (2008 = reference)
-    print("Fitting event study models...")
+    # Event study: year-by-year coefficients. The reference is the omitted first
+    # level of C(YEAR), i.e. the minimum YEAR actually present in the panel.
+    ref_year = int(df_panel.index.get_level_values("YEAR").min())
+    print(f"Fitting event study models (reference year = {ref_year})...")
     es_epc = fit_event_study(df_panel, "CURRENT_ENERGY_EFFICIENCY")
     es_co2 = fit_event_study(df_panel, "CO2_EMISSIONS_CURRENT")
     es_belowc = fit_event_study(df_panel, "BELOW_C_INT")
 
-    es_epc_tbl = extract_event_study(es_epc)
-    es_co2_tbl = extract_event_study(es_co2)
-    es_belowc_tbl = extract_event_study(es_belowc)
+    es_epc_tbl = extract_event_study(es_epc, ref_year)
+    es_co2_tbl = extract_event_study(es_co2, ref_year)
+    es_belowc_tbl = extract_event_study(es_belowc, ref_year)
 
     es_epc_tbl.to_csv(TABLE_DIR / "event_study_epc.csv", index=False)
     es_co2_tbl.to_csv(TABLE_DIR / "event_study_co2.csv", index=False)
@@ -565,19 +649,19 @@ def main() -> None:
 
     plot_event_study(
         es_epc_tbl,
-        title="Event study: EPC efficiency score by year (2008 = reference)",
+        title=f"Event study: EPC efficiency score by year ({ref_year} = reference)",
         y_label="Change in EPC score",
         out_path=FIG_DIR / "figure_6_5_event_study_epc.png",
     )
     plot_event_study(
         es_co2_tbl,
-        title="Event study: CO₂ emissions by year (2008 = reference)",
+        title=f"Event study: CO₂ emissions by year ({ref_year} = reference)",
         y_label="Change in CO₂ emissions (tonnes/year)",
         out_path=FIG_DIR / "figure_6_6_event_study_co2.png",
     )
     plot_event_study(
         es_belowc_tbl,
-        title="Event study: Probability below EPC C by year (2008 = reference)",
+        title=f"Event study: Probability below EPC C by year ({ref_year} = reference)",
         y_label="Change in probability",
         out_path=FIG_DIR / "figure_6_7_event_study_belowc.png",
     )

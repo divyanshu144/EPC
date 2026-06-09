@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import sys
+
+from ew_housing_energy_impact.paths import repo_root
+
+# The shared `config` module and the `scripts.pipeline.*` modules live at the
+# repo root, which is NOT part of the installed (src-layout) package. Put the
+# repo root on sys.path *before* importing them so the installed `ewhei` console
+# script works from any working directory, not only when launched from the repo
+# root. This must run before the `validation` and `config` imports below, which
+# transitively pull in `scripts.pipeline.*`.
+_ROOT = repo_root()
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import pandas as pd
 
 from ew_housing_energy_impact.logging_utils import setup_logger
-from ew_housing_energy_impact.paths import repo_root
 from ew_housing_energy_impact.validation import validate_imputed_csv, write_validation_report
 from ew_housing_energy_impact.manifest import write_manifest
 from ew_housing_energy_impact.registry import register_artifact
 from config import REGISTRY_PATH, ARTIFACTS_DIR
 
-def cmd_run_all() -> None:
+def cmd_run_all(mode: str = "la") -> None:
     from scripts.pipeline import (
         epc_download_merge_fast,
         clean_epc,
@@ -22,7 +35,7 @@ def cmd_run_all() -> None:
         train_models,
     )
 
-    epc_download_merge_fast.main()
+    epc_download_merge_fast.main(mode=mode)
     clean_epc.main()
     build_features.main()
     report_eda.main()
@@ -59,13 +72,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="ewhei", description="EPC report pipeline CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("run-all", help="Run the full report pipeline")
+    _MODE_HELP = (
+        "'la' (default): download only SW LA zips (~200 MB). "
+        "'year': full annual E&W bulk zips (~6.7 GB)."
+    )
+    run_all = sub.add_parser("run-all", help="Run the full report pipeline")
+    run_all.add_argument(
+        "--mode", choices=["la", "year"], default="la", help=_MODE_HELP
+    )
     dl = sub.add_parser("download", help="Download and merge EPC data")
     dl.add_argument(
-        "--mode",
-        choices=["la", "year"],
-        default="la",
-        help="'la' (default): download only SW LA zips (~200 MB). 'year': full annual E&W bulk zips (~6.7 GB).",
+        "--mode", choices=["la", "year"], default="la", help=_MODE_HELP
     )
     sub.add_parser("clean", help="Clean EPC data for South West")
     sub.add_parser("features", help="Build features and policy periods")
@@ -79,7 +96,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "run-all":
-        cmd_run_all()
+        cmd_run_all(mode=args.mode)
     elif args.cmd == "download":
         from scripts.pipeline import epc_download_merge_fast
         epc_download_merge_fast.main(mode=args.mode)

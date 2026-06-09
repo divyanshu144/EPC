@@ -66,7 +66,9 @@ def load_data() -> pd.DataFrame:
     return df
 
 
-def sample_data(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def sample_data(
+    df: pd.DataFrame, allow_row_level_split: bool = False
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split by BUILDING_REFERENCE_NUMBER to prevent leakage across train/test.
 
     The same physical dwelling can have multiple EPC certificates across years.
@@ -74,13 +76,26 @@ def sample_data(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     train and test sets, inflating evaluation metrics. Splitting on the property
     identifier ensures the test set contains only unseen properties.
 
+    By default this is a hard requirement: if BUILDING_REFERENCE_NUMBER is
+    absent the function raises, rather than silently falling back to a
+    leakage-prone row-level split. Pass ``allow_row_level_split=True`` to opt
+    into the row-level split explicitly (e.g. for a dataset that genuinely has
+    no property identifier).
+
     Returns (train_df, test_df) where test is ~20% of unique properties.
     """
     if "BUILDING_REFERENCE_NUMBER" not in df.columns:
-        # Fallback for datasets without the ID column: row-level split with warning.
+        if not allow_row_level_split:
+            raise ValueError(
+                "BUILDING_REFERENCE_NUMBER is missing from the modelling dataset, "
+                "so a leakage-safe property-level split is impossible. Ensure it is "
+                "kept through cleaning (see CLEAN_KEEP_COLS in scripts/pipeline/"
+                "schemas.py). To deliberately use a row-level split, call "
+                "sample_data(df, allow_row_level_split=True)."
+            )
         import warnings
         warnings.warn(
-            "BUILDING_REFERENCE_NUMBER not found — falling back to row-level split. "
+            "BUILDING_REFERENCE_NUMBER not found — using an explicit row-level split. "
             "Test metrics may be optimistic if properties repeat across years.",
             UserWarning,
             stacklevel=2,
@@ -265,17 +280,30 @@ def main() -> None:
     fi_df.to_csv(TABLE_DIR / "gbr_feature_importance.csv", index=False)
     register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "gbr_feature_importance.csv", {"model": "GBR"})
 
-    # Grouped importances
+    # Grouped importances.
+    # OneHotEncoder expands a categorical like MAIN_FUEL_STD into transformed
+    # names such as "cat__MAIN_FUEL_STD_mains gas". A naive split on "_" would
+    # truncate MAIN_FUEL_STD to "MAIN" and merge distinct variables. Instead we
+    # match each transformed name back to its source variable by longest-prefix,
+    # so variables whose names contain underscores are preserved.
+    raw_features = cat_features + num_features
+
+    def get_base_feature(transformed_name: str) -> str:
+        name = (
+            transformed_name.split("__", 1)[1]
+            if "__" in transformed_name
+            else transformed_name
+        )
+        for feature in sorted(raw_features, key=len, reverse=True):
+            if name == feature or name.startswith(feature + "_"):
+                return feature
+        return name
+
     def aggregate_importances(fi):
-        rows = []
-        for feat, imp in zip(fi["feature"], fi["importance"]):
-            if feat.startswith("cat__"):
-                base = feat.split("__")[1].split("_")[0]
-            elif feat.startswith("num__"):
-                base = feat.split("__")[1]
-            else:
-                base = feat
-            rows.append({"group": base, "importance": imp})
+        rows = [
+            {"group": get_base_feature(feat), "importance": imp}
+            for feat, imp in zip(fi["feature"], fi["importance"])
+        ]
         return pd.DataFrame(rows).groupby("group", as_index=False)["importance"].sum()
 
     fi_grouped = aggregate_importances(fi_df).sort_values("importance", ascending=False)
