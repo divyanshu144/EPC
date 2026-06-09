@@ -7,9 +7,11 @@ def test_validation_ok_minimal():
     df = pd.DataFrame(
         {
             "LMK_KEY": ["a"],
+            "BUILDING_REFERENCE_NUMBER": ["100000000001"],
             "POSTCODE": ["AB1"],
-            "LOCAL_AUTHORITY": ["X"],
-            "LOCAL_AUTHORITY_LABEL": ["Test LA"],
+            "LOCAL_AUTHORITY": ["Devon"],
+            "LOCAL_AUTHORITY_LABEL": ["Devon"],
+            "ANALYSIS_AUTHORITY": ["Devon"],
             "LODGEMENT_DATE": ["2020-01-01"],
             "CURRENT_ENERGY_RATING": ["D"],
             "CURRENT_ENERGY_EFFICIENCY": [60],

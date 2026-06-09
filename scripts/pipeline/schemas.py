@@ -70,9 +70,16 @@ CORE_DTYPES: dict[str, str] = {
 # Subset used in the South West cleaning step (plus engineered fields).
 CLEAN_KEEP_COLS: list[str] = [
     "LMK_KEY",
+    # Property-level identifier — required by the leakage-safe train/test split
+    # in train_models.py (the same dwelling can be re-lodged across years).
+    "BUILDING_REFERENCE_NUMBER",
     "POSTCODE",
+    # Post-clean, LOCAL_AUTHORITY / LOCAL_AUTHORITY_LABEL hold the rolled-up 14
+    # analysis authorities; ANALYSIS_AUTHORITY is the explicit cluster column and
+    # the raw EPC identifiers are preserved in *_RAW (added by clean_epc).
     "LOCAL_AUTHORITY",
     "LOCAL_AUTHORITY_LABEL",
+    "ANALYSIS_AUTHORITY",
     "LODGEMENT_DATE",
     "CURRENT_ENERGY_RATING",
     "CURRENT_ENERGY_EFFICIENCY",
@@ -99,6 +106,7 @@ CLEAN_KEEP_COLS: list[str] = [
 # Dtypes used in cleaning (keep aligned with CORE_DTYPES).
 CLEAN_DTYPES: dict[str, str] = {
     "LMK_KEY": "string",
+    "BUILDING_REFERENCE_NUMBER": "string",
     "POSTCODE": "string",
     "LOCAL_AUTHORITY": "string",
     "LOCAL_AUTHORITY_LABEL": "string",

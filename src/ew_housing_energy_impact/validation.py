@@ -8,6 +8,7 @@ import json
 import pandas as pd
 
 from scripts.pipeline.schemas import CLEAN_KEEP_COLS
+from config import ANALYSIS_AUTHORITIES
 
 
 @dataclass
@@ -15,6 +16,31 @@ class ValidationResult:
     ok: bool
     issues: list[str]
     summary: dict
+
+
+def analysis_authority_coverage(df: pd.DataFrame) -> dict:
+    """Report South West analysis-authority rollup coverage.
+
+    Returns a dict with the expected count, the authorities present, those
+    missing, and per-authority row counts. Used by the geography validation in
+    the clean/validate steps to confirm all 14 dissertation clusters are present.
+    """
+    if "ANALYSIS_AUTHORITY" not in df.columns:
+        return {
+            "expected": len(ANALYSIS_AUTHORITIES),
+            "present": [],
+            "missing": list(ANALYSIS_AUTHORITIES),
+            "row_counts": {},
+        }
+    counts = df["ANALYSIS_AUTHORITY"].value_counts().to_dict()
+    present = [a for a in ANALYSIS_AUTHORITIES if counts.get(a, 0) > 0]
+    missing = [a for a in ANALYSIS_AUTHORITIES if counts.get(a, 0) == 0]
+    return {
+        "expected": len(ANALYSIS_AUTHORITIES),
+        "present": present,
+        "missing": missing,
+        "row_counts": {a: int(counts.get(a, 0)) for a in ANALYSIS_AUTHORITIES},
+    }
 
 
 def validate_clean_data(df: pd.DataFrame) -> ValidationResult:
@@ -59,6 +85,7 @@ def validate_clean_data(df: pd.DataFrame) -> ValidationResult:
         "missing_pct_top10": (
             df.isna().mean().sort_values(ascending=False).head(10).to_dict()
         ),
+        "geography": analysis_authority_coverage(df),
     }
 
     return ValidationResult(ok=len(issues) == 0, issues=issues, summary=summary)

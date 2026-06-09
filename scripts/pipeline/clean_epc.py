@@ -3,7 +3,9 @@
 Clean EPC core CSV and filter to South West region.
 
 - Reads ew_epc_core.csv in streaming chunks.
-- Filters to SOUTH_WEST_LAS.
+- Filters to South West rows and rolls lower-tier/unitary authorities up to the
+  14 analysis authorities (config.SOUTH_WEST_EPC_AUTHORITIES), preserving the raw
+  EPC identifiers in *_RAW columns and exposing ANALYSIS_AUTHORITY.
 - Standardises age band, fuel, tenure.
 - Engineers useful features (gap, band score, flags).
 - Applies simple outlier rules.
@@ -14,10 +16,14 @@ Clean EPC core CSV and filter to South West region.
 from pathlib import Path
 import pandas as pd
 
+from collections import Counter
+
 from config import (
     EPC_MERGED_CSV,
     EPC_CLEAN_SW_DIR,      # we’ll still use the directory, but for now just 1 csv
-    SOUTH_WEST_LAS,
+    ANALYSIS_AUTHORITIES,
+    CODE_TO_ANALYSIS_AUTHORITY,
+    LABEL_TO_ANALYSIS_AUTHORITY,
     BAND_TO_SCORE,
     FUEL_MAP,
     TENURE_MAP,
@@ -44,15 +50,50 @@ def norm_age_band(x: str) -> str:
     return s
 
 
+def roll_up_to_analysis_authority(df: pd.DataFrame) -> pd.Series:
+    """Map each row to one of the 14 South West analysis authorities.
+
+    EPC supplies data at lower-tier/unitary level (e.g. 'Exeter', 'Cheltenham',
+    'Mendip'); these must roll up to the dissertation's upper-tier clusters
+    (Devon, Gloucestershire, Somerset, …). Matching is by GSS code first
+    (LOCAL_AUTHORITY), falling back to the certificate LOCAL_AUTHORITY_LABEL.
+    Returns a Series of analysis-authority names (NaN where not South West).
+    """
+    code = df["LOCAL_AUTHORITY"].astype("string")
+    analysis = code.map(CODE_TO_ANALYSIS_AUTHORITY)
+    # Fallback to label for any rows whose code did not resolve.
+    need = analysis.isna()
+    if need.any() and "LOCAL_AUTHORITY_LABEL" in df.columns:
+        label = df["LOCAL_AUTHORITY_LABEL"].astype("string")
+        analysis = analysis.where(~need, label.map(LABEL_TO_ANALYSIS_AUTHORITY))
+    return analysis
+
+
 def clean_chunk(df: pd.DataFrame) -> pd.DataFrame:
-    # 1) Filter to South West LAs
-    df = df[df["LOCAL_AUTHORITY_LABEL"].isin(SOUTH_WEST_LAS)]
+    # 1) Filter to South West rows by rolling up to the 14 analysis authorities.
+    #    Works on lower-tier/unitary codes *and* labels, so district-level rows
+    #    (e.g. Exeter -> Devon) are kept rather than dropped.
+    analysis = roll_up_to_analysis_authority(df)
+    mask = analysis.notna().to_numpy()
+    df = df[mask].copy()
     if df.empty:
         return df
+    analysis = analysis[mask]
 
-    # 2) Keep only needed cols that exist in this chunk
+    # 2) Keep only needed cols that exist in this chunk, then attach the rollup
+    #    while preserving the raw EPC identifiers.
     keep = [c for c in CORE_KEEP if c in df.columns]
+    raw_code = df["LOCAL_AUTHORITY"].to_numpy()
+    raw_label = df["LOCAL_AUTHORITY_LABEL"].to_numpy()
     df = df[keep].copy()
+    df["LOCAL_AUTHORITY_RAW"] = raw_code
+    df["LOCAL_AUTHORITY_LABEL_RAW"] = raw_label
+    df["ANALYSIS_AUTHORITY"] = analysis.to_numpy()
+    # Overwrite the entity key + label with the analysis authority so all
+    # downstream code (FE entity index, clustering, new-build share, EDA) operates
+    # at the 14-authority level. Raw values are preserved above.
+    df["LOCAL_AUTHORITY"] = df["ANALYSIS_AUTHORITY"]
+    df["LOCAL_AUTHORITY_LABEL"] = df["ANALYSIS_AUTHORITY"]
 
     # 3) Dates & Year
     df["LODGEMENT_DATE"] = pd.to_datetime(df["LODGEMENT_DATE"], errors="coerce", utc=True)
@@ -90,6 +131,7 @@ def main() -> None:
     n_rows_in = 0
     n_rows_out = 0
     first = True
+    auth_counts: Counter = Counter()
 
     for chunk in pd.read_csv(
         IN_CSV,
@@ -103,6 +145,7 @@ def main() -> None:
             continue
 
         n_rows_out += len(clean)
+        auth_counts.update(clean["ANALYSIS_AUTHORITY"].value_counts().to_dict())
 
         mode = "w" if first else "a"
         header = first
@@ -113,6 +156,26 @@ def main() -> None:
 
     print(f"✓ Done. In: {n_rows_in:,}  ->  Out (SW clean): {n_rows_out:,}")
     print(f"Saved clean CSV to: {OUT_CSV}")
+    _report_geography(auth_counts)
+
+
+def _report_geography(auth_counts: Counter) -> None:
+    """Print the analysis-authority rollup summary and flag missing clusters."""
+    present = [a for a in ANALYSIS_AUTHORITIES if auth_counts.get(a, 0) > 0]
+    missing = [a for a in ANALYSIS_AUTHORITIES if auth_counts.get(a, 0) == 0]
+
+    print("\n--- Geography rollup ---")
+    print(
+        f"Analysis authorities present: {len(present)} of "
+        f"{len(ANALYSIS_AUTHORITIES)} expected"
+    )
+    for auth in ANALYSIS_AUTHORITIES:
+        print(f"    {auth:40s} {auth_counts.get(auth, 0):>12,d} rows")
+    if missing:
+        print(
+            f"⚠ Missing expected analysis authorities (0 rows): {missing}. "
+            "Check that the download step fetched their lower-tier/unitary files."
+        )
 
 
 if __name__ == "__main__":

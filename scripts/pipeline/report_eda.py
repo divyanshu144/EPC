@@ -124,14 +124,18 @@ def main() -> None:
     plt.ylabel("CO2 Emissions (tonnes/year)")
     save_fig(FIG_DIR / "figure_3_3_co2_by_fuel.png")
 
-    # 4) Exeter vs Plymouth EPC trend
-    df_city = df[df["LOCAL_AUTHORITY_LABEL"].isin(["Exeter", "Plymouth"])].copy()
+    # 4) Exeter vs Plymouth EPC trend.
+    # Exeter is a lower-tier Devon district and is rolled up to "Devon" in
+    # LOCAL_AUTHORITY_LABEL, so use the preserved raw EPC label for this
+    # city-level comparison (falls back to the rolled-up label if absent).
+    city_label = "LOCAL_AUTHORITY_LABEL_RAW" if "LOCAL_AUTHORITY_LABEL_RAW" in df.columns else "LOCAL_AUTHORITY_LABEL"
+    df_city = df[df[city_label].isin(["Exeter", "Plymouth"])].copy()
     trend = (
-        df_city.groupby(["YEAR", "LOCAL_AUTHORITY_LABEL"], as_index=False)
+        df_city.groupby(["YEAR", city_label], as_index=False)
         .agg(mean_epc=("CURRENT_ENERGY_EFFICIENCY", "mean"))
     )
     plt.figure(figsize=(8, 5))
-    sns.lineplot(data=trend, x="YEAR", y="mean_epc", hue="LOCAL_AUTHORITY_LABEL", marker="o")
+    sns.lineplot(data=trend, x="YEAR", y="mean_epc", hue=city_label, marker="o")
     plt.title("EPC Efficiency Trend Comparison (Exeter vs Plymouth)")
     plt.xlabel("Year")
     plt.ylabel("Mean EPC Efficiency")
