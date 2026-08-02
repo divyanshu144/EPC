@@ -1,6 +1,37 @@
 version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16
+    container_name: ewhei-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-epc}
+      POSTGRES_USER: ${POSTGRES_USER:-epc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-epc}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-epc} -d ${POSTGRES_DB:-epc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.19.0
+    container_name: ewhei-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlruns/mlflow.db
+      --default-artifact-root /mlruns/artifacts
+
   notebook:
     build: .
     container_name: ew-notebook
@@ -42,3 +73,6 @@ services:
     volumes:
       - ./data/processed:/app/data/processed
       - ./reports/artifacts:/app/reports/artifacts
+
+volumes:
+  postgres-data:

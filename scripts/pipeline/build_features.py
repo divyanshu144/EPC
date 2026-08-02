@@ -12,15 +12,12 @@ Steps:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
 from config import EPC_CLEAN_SW_DIR, REGISTRY_PATH
-from scripts.pipeline.policy import POLICY_ORDER, policy_period
 from ew_housing_energy_impact.registry import register_artifact
-
+from scripts.pipeline.policy import POLICY_ORDER, policy_period
 
 IN_CSV = EPC_CLEAN_SW_DIR / "ew_epc_core_clean_sw.csv"
 OUT_IMPUTED = EPC_CLEAN_SW_DIR / "ew_epc_core_clean_sw_imputed.csv"
@@ -96,11 +93,7 @@ def add_new_build_share(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     df["_is_new_build"] = (
-        df["TRANSACTION_TYPE"]
-        .str.strip()
-        .str.lower()
-        .eq("new dwelling")
-        .astype(int)
+        df["TRANSACTION_TYPE"].str.strip().str.lower().eq("new dwelling").astype(int)
     )
     nb_share = (
         df.groupby(["LOCAL_AUTHORITY", "YEAR"], as_index=False)["_is_new_build"]

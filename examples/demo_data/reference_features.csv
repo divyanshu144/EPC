@@ -1,0 +1,5 @@
+ANALYSIS_AUTHORITY,LOCAL_AUTHORITY,YEAR,POLICY_PERIOD,CURRENT_ENERGY_EFFICIENCY,CO2_EMISSIONS_CURRENT,BELOW_C,BELOW_C_INT,MAIN_FUEL_STD,PROPERTY_TYPE,LOG_FLOOR_AREA
+Devon,Devon,2021,Post-Strategy,72,2.4,false,0,mains gas,House,4.20
+Devon,Devon,2021,Post-Strategy,68,2.7,true,1,mains gas,Flat,3.95
+Somerset,Somerset,2021,Post-Strategy,75,2.1,false,0,electric,House,4.10
+Dorset,Dorset,2021,Post-Strategy,70,2.5,false,0,mains gas,Bungalow,4.00

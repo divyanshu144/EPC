@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "issues": [],
+  "summary": {
+    "rows": 4,
+    "columns": 11,
+    "geography": {
+      "present": ["Devon", "Somerset", "Dorset"],
+      "missing": []
+    }
+  }
+}

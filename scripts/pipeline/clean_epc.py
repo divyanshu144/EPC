@@ -13,22 +13,21 @@ Clean EPC core CSV and filter to South West region.
     data/processed/ew_epc_core_clean_sw.csv
 """
 
-from pathlib import Path
-import pandas as pd
-
 from collections import Counter
 
+import pandas as pd
+
 from config import (
-    EPC_MERGED_CSV,
-    EPC_CLEAN_SW_DIR,      # we’ll still use the directory, but for now just 1 csv
     ANALYSIS_AUTHORITIES,
-    CODE_TO_ANALYSIS_AUTHORITY,
-    LABEL_TO_ANALYSIS_AUTHORITY,
     BAND_TO_SCORE,
+    CODE_TO_ANALYSIS_AUTHORITY,
+    EPC_CLEAN_SW_DIR,  # we’ll still use the directory, but for now just 1 csv
+    EPC_MERGED_CSV,
     FUEL_MAP,
+    LABEL_TO_ANALYSIS_AUTHORITY,
     TENURE_MAP,
 )
-from scripts.pipeline.schemas import CLEAN_KEEP_COLS, CLEAN_DTYPES
+from scripts.pipeline.schemas import CLEAN_DTYPES, CLEAN_KEEP_COLS
 
 # ---------- CONFIG ----------
 IN_CSV = EPC_MERGED_CSV
@@ -165,10 +164,7 @@ def _report_geography(auth_counts: Counter) -> None:
     missing = [a for a in ANALYSIS_AUTHORITIES if auth_counts.get(a, 0) == 0]
 
     print("\n--- Geography rollup ---")
-    print(
-        f"Analysis authorities present: {len(present)} of "
-        f"{len(ANALYSIS_AUTHORITIES)} expected"
-    )
+    print(f"Analysis authorities present: {len(present)} of {len(ANALYSIS_AUTHORITIES)} expected")
     for auth in ANALYSIS_AUTHORITIES:
         print(f"    {auth:40s} {auth_counts.get(auth, 0):>12,d} rows")
     if missing:

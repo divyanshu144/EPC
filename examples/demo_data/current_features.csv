@@ -1,0 +1,5 @@
+ANALYSIS_AUTHORITY,LOCAL_AUTHORITY,YEAR,POLICY_PERIOD,CURRENT_ENERGY_EFFICIENCY,CO2_EMISSIONS_CURRENT,BELOW_C,BELOW_C_INT,MAIN_FUEL_STD,PROPERTY_TYPE,LOG_FLOOR_AREA
+Devon,Devon,2025,Post-Strategy,61,3.2,true,1,electric,House,4.25
+Devon,Devon,2025,Post-Strategy,63,3.0,true,1,electric,Flat,3.90
+Somerset,Somerset,2025,Post-Strategy,74,2.2,false,0,electric,House,4.15
+Cornwall,Cornwall,2025,Post-Strategy,66,2.8,true,1,mains gas,Terrace,4.05

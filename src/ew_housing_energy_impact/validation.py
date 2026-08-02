@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-import json
+
 import pandas as pd
 
-from scripts.pipeline.schemas import CLEAN_KEEP_COLS
 from config import ANALYSIS_AUTHORITIES
+from scripts.pipeline.schemas import CLEAN_KEEP_COLS
 
 
 @dataclass
@@ -82,9 +83,7 @@ def validate_clean_data(df: pd.DataFrame) -> ValidationResult:
     summary = {
         "rows": len(df),
         "columns": len(df.columns),
-        "missing_pct_top10": (
-            df.isna().mean().sort_values(ascending=False).head(10).to_dict()
-        ),
+        "missing_pct_top10": (df.isna().mean().sort_values(ascending=False).head(10).to_dict()),
         "geography": analysis_authority_coverage(df),
     }
 

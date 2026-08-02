@@ -7,16 +7,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
 
 from config import ROOT
 from scripts.pipeline.policy import POLICY_ORDER
 
-
-DATA_PATH = ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+DATA_PATH = (
+    ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+)
 FIG_DIR = ROOT / "reports" / "figures"
 TABLE_DIR = ROOT / "reports" / "tables"
 
@@ -75,7 +75,9 @@ def main() -> None:
 
     # 1) EPC Rating Distribution (South West)
     epc_order = ["A", "B", "C", "D", "E", "F", "G"]
-    df["CURRENT_ENERGY_RATING"] = pd.Categorical(df["CURRENT_ENERGY_RATING"], categories=epc_order, ordered=True)
+    df["CURRENT_ENERGY_RATING"] = pd.Categorical(
+        df["CURRENT_ENERGY_RATING"], categories=epc_order, ordered=True
+    )
     plt.figure(figsize=(8, 5))
     sns.countplot(data=df, x="CURRENT_ENERGY_RATING", order=epc_order, palette="viridis")
     plt.title("EPC Rating Distribution (South West)")
@@ -128,11 +130,14 @@ def main() -> None:
     # Exeter is a lower-tier Devon district and is rolled up to "Devon" in
     # LOCAL_AUTHORITY_LABEL, so use the preserved raw EPC label for this
     # city-level comparison (falls back to the rolled-up label if absent).
-    city_label = "LOCAL_AUTHORITY_LABEL_RAW" if "LOCAL_AUTHORITY_LABEL_RAW" in df.columns else "LOCAL_AUTHORITY_LABEL"
+    city_label = (
+        "LOCAL_AUTHORITY_LABEL_RAW"
+        if "LOCAL_AUTHORITY_LABEL_RAW" in df.columns
+        else "LOCAL_AUTHORITY_LABEL"
+    )
     df_city = df[df[city_label].isin(["Exeter", "Plymouth"])].copy()
-    trend = (
-        df_city.groupby(["YEAR", city_label], as_index=False)
-        .agg(mean_epc=("CURRENT_ENERGY_EFFICIENCY", "mean"))
+    trend = df_city.groupby(["YEAR", city_label], as_index=False).agg(
+        mean_epc=("CURRENT_ENERGY_EFFICIENCY", "mean")
     )
     plt.figure(figsize=(8, 5))
     sns.lineplot(data=trend, x="YEAR", y="mean_epc", hue=city_label, marker="o")
@@ -162,16 +167,13 @@ def main() -> None:
     save_fig(FIG_DIR / "figure_3_5_correlation_heatmap.png")
 
     # Table: Policy period summary
-    policy_summary = (
-        df.groupby("POLICY_PERIOD", as_index=False)
-        .agg(
-            mean_epc=("CURRENT_ENERGY_EFFICIENCY", "mean"),
-            median_epc=("CURRENT_ENERGY_EFFICIENCY", "median"),
-            mean_co2=("CO2_EMISSIONS_CURRENT", "mean"),
-            median_co2=("CO2_EMISSIONS_CURRENT", "median"),
-            below_c_share=("BELOW_C", "mean"),
-            n_cert=("LMK_KEY", "count"),
-        )
+    policy_summary = df.groupby("POLICY_PERIOD", as_index=False).agg(
+        mean_epc=("CURRENT_ENERGY_EFFICIENCY", "mean"),
+        median_epc=("CURRENT_ENERGY_EFFICIENCY", "median"),
+        mean_co2=("CO2_EMISSIONS_CURRENT", "mean"),
+        median_co2=("CO2_EMISSIONS_CURRENT", "median"),
+        below_c_share=("BELOW_C", "mean"),
+        n_cert=("LMK_KEY", "count"),
     )
     policy_summary.to_csv(TABLE_DIR / "table_4_1_policy_period_summary.csv", index=False)
 

@@ -3,8 +3,16 @@
 
 from __future__ import annotations
 
-from scripts.pipeline import epc_download_merge_fast, clean_epc, build_features, report_eda, run_did, train_models, quality_report
-from ew_housing_energy_impact.cli import cmd_validate, cmd_manifest
+from ew_housing_energy_impact.cli import cmd_manifest, cmd_validate
+from scripts.pipeline import (
+    build_features,
+    clean_epc,
+    epc_download_merge_fast,
+    quality_report,
+    report_eda,
+    run_did,
+    train_models,
+)
 
 
 def main() -> None:

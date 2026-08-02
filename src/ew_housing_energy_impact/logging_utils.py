@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 
 def setup_logger(name: str = "ewhei", level: int = logging.INFO) -> logging.Logger:
@@ -13,9 +12,7 @@ def setup_logger(name: str = "ewhei", level: int = logging.INFO) -> logging.Logg
     logger.setLevel(level)
 
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger

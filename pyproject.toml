@@ -27,6 +27,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pydantic>=2.10",
+    "prefect>=2.20,<3",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "mlflow>=2.18",
 ]
 
 [project.scripts]
@@ -34,3 +38,28 @@ ewhei = "ew_housing_energy_impact.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "notebooks",
+    ".git",
+    ".pytest_cache",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = [
+    # The CLI intentionally mutates sys.path before imports so the installed
+    # console script can reach root-level pipeline modules.
+    "E402",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:rerunfailures"

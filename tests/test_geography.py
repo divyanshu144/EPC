@@ -11,12 +11,12 @@ import pytest
 
 import config
 from scripts.pipeline import epc_download_merge_fast as dl
-from scripts.pipeline.clean_epc import roll_up_to_analysis_authority, clean_chunk
-
+from scripts.pipeline.clean_epc import clean_chunk
 
 # --------------------------------------------------------------------------- #
 # Mapping-level invariants
 # --------------------------------------------------------------------------- #
+
 
 def test_no_county_e10_codes_used_for_download():
     """EPC has no bulk file for county councils (E10xxxxxx); none may be used."""
@@ -51,17 +51,16 @@ def test_exactly_14_analysis_authorities():
         ("E07000189", "South Somerset", "Somerset"),
         ("E07000246", "Somerset West and Taunton", "Somerset"),
         ("E07000190", "Taunton Deane", "Somerset"),  # pre-2019
-        ("E06000066", "Somerset", "Somerset"),       # 2023+ unitary
+        ("E06000066", "Somerset", "Somerset"),  # 2023+ unitary
         # Dorset (pre-2019) districts -> Dorset
         ("E07000050", "North Dorset", "Dorset"),
         ("E07000052", "West Dorset", "Dorset"),
-        ("E06000059", "Dorset", "Dorset"),           # 2019+ unitary
+        ("E06000059", "Dorset", "Dorset"),  # 2019+ unitary
         # BCP transition: Bournemouth/Poole (pre-2019) + Christchurch -> BCP
         ("E06000028", "Bournemouth", "Bournemouth, Christchurch and Poole"),
         ("E06000029", "Poole", "Bournemouth, Christchurch and Poole"),
         ("E07000048", "Christchurch", "Bournemouth, Christchurch and Poole"),
-        ("E06000058", "Bournemouth, Christchurch and Poole",
-         "Bournemouth, Christchurch and Poole"),
+        ("E06000058", "Bournemouth, Christchurch and Poole", "Bournemouth, Christchurch and Poole"),
         # Plain unitaries
         ("E06000023", "Bristol, City of", "Bristol, City of"),
         ("E06000052", "Cornwall", "Cornwall"),
@@ -75,7 +74,7 @@ def test_rollup_by_code_and_label(code, label, expected):
 
 
 def test_non_south_west_returns_none():
-    assert config.analysis_authority_for(code="E09000001") is None       # City of London
+    assert config.analysis_authority_for(code="E09000001") is None  # City of London
     assert config.analysis_authority_for(label="Birmingham") is None
 
 
@@ -83,13 +82,14 @@ def test_non_south_west_returns_none():
 # Download selection
 # --------------------------------------------------------------------------- #
 
+
 def test_pick_la_files_selects_by_district_code():
     files = {
-        "domestic-E07000041-Exeter.zip": {},                 # Devon district
-        "domestic-E07000078-Cheltenham.zip": {},             # Glos district
-        "domestic-E06000023-Bristol-City-of.zip": {},        # unitary
-        "domestic-E10000008-Devon.zip": {},                  # county -> must NOT match
-        "non-domestic-E06000023.zip": {},                    # wrong prefix
+        "domestic-E07000041-Exeter.zip": {},  # Devon district
+        "domestic-E07000078-Cheltenham.zip": {},  # Glos district
+        "domestic-E06000023-Bristol-City-of.zip": {},  # unitary
+        "domestic-E10000008-Devon.zip": {},  # county -> must NOT match
+        "non-domestic-E06000023.zip": {},  # wrong prefix
         "readme.txt": {},
     }
     picked = dl.pick_la_files(files)
@@ -113,6 +113,7 @@ def test_missing_analysis_authorities_detection():
 # --------------------------------------------------------------------------- #
 # Clean-step rollup (district rows must NOT be dropped)
 # --------------------------------------------------------------------------- #
+
 
 def _raw_row(code: str, label: str) -> dict:
     """A minimal raw EPC certificate row that survives clean_chunk's filters."""
@@ -141,15 +142,17 @@ def _raw_row(code: str, label: str) -> dict:
 
 
 def test_clean_chunk_keeps_district_rows_and_rolls_up():
-    raw = pd.DataFrame([
-        _raw_row("E07000041", "Exeter"),                 # -> Devon
-        _raw_row("E07000078", "Cheltenham"),             # -> Gloucestershire
-        _raw_row("E07000187", "Mendip"),                 # -> Somerset
-        _raw_row("E07000050", "North Dorset"),           # -> Dorset
-        _raw_row("E07000048", "Christchurch"),           # -> BCP
-        _raw_row("E06000023", "Bristol, City of"),       # -> Bristol
-        _raw_row("E09000001", "City of London"),         # -> dropped (not SW)
-    ])
+    raw = pd.DataFrame(
+        [
+            _raw_row("E07000041", "Exeter"),  # -> Devon
+            _raw_row("E07000078", "Cheltenham"),  # -> Gloucestershire
+            _raw_row("E07000187", "Mendip"),  # -> Somerset
+            _raw_row("E07000050", "North Dorset"),  # -> Dorset
+            _raw_row("E07000048", "Christchurch"),  # -> BCP
+            _raw_row("E06000023", "Bristol, City of"),  # -> Bristol
+            _raw_row("E09000001", "City of London"),  # -> dropped (not SW)
+        ]
+    )
     out = clean_chunk(raw)
 
     # The non-SW row is dropped; all six SW rows survive.

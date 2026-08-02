@@ -26,24 +26,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-
-from linearmodels.panel import PanelOLS
 import statsmodels.api as sm
-from sklearn.decomposition import PCA
+from linearmodels.panel import PanelOLS
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from config import ROOT, REGISTRY_PATH
-from scripts.pipeline.policy import POLICY_ORDER
+from config import REGISTRY_PATH, ROOT
 from ew_housing_energy_impact.registry import register_artifact
+from scripts.pipeline.policy import POLICY_ORDER
 
-
-DATA_PATH = ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+DATA_PATH = (
+    ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+)
 FIG_DIR = ROOT / "reports" / "figures"
 TABLE_DIR = ROOT / "reports" / "tables"
 
@@ -105,9 +105,7 @@ def prepare_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
     if "BELOW_C_INT" not in df.columns:
         df["BELOW_C_INT"] = df["BELOW_C"].astype(int)
-    df["POLICY_PERIOD"] = pd.Categorical(
-        df["POLICY_PERIOD"], categories=POLICY_ORDER, ordered=True
-    )
+    df["POLICY_PERIOD"] = pd.Categorical(df["POLICY_PERIOD"], categories=POLICY_ORDER, ordered=True)
     df = df.set_index(["LOCAL_AUTHORITY", "YEAR"]).sort_index()
     return df
 
@@ -119,9 +117,7 @@ def fit_fe(df_panel: pd.DataFrame, dep_var: str):
         index=df_panel.index,
         name="LOCAL_AUTHORITY",
     )
-    model = PanelOLS.from_formula(
-        formula, data=df_panel, drop_absorbed=True, check_rank=False
-    )
+    model = PanelOLS.from_formula(formula, data=df_panel, drop_absorbed=True, check_rank=False)
     return model.fit(cov_type="clustered", clusters=clusters)
 
 
@@ -268,6 +264,7 @@ def extract_policy_effects(res, wcb_pvalues: pd.Series | None = None, prefix="C(
 # Event-study: year-by-year coefficients
 # ---------------------------------------------------------------------------
 
+
 def fit_event_study(df_panel: pd.DataFrame, dep_var: str):
     """Fit the event-study (year-dummy) FE model.
 
@@ -287,9 +284,7 @@ def fit_event_study(df_panel: pd.DataFrame, dep_var: str):
         index=df_panel.index,
         name="LOCAL_AUTHORITY",
     )
-    model = PanelOLS.from_formula(
-        formula, data=df_panel, drop_absorbed=True, check_rank=False
-    )
+    model = PanelOLS.from_formula(formula, data=df_panel, drop_absorbed=True, check_rank=False)
     return model.fit(cov_type="clustered", clusters=clusters)
 
 
@@ -329,9 +324,9 @@ def extract_event_study(res, ref_year: int) -> pd.DataFrame:
     # Prepend the actual reference year at zero (skip if it somehow appears as a
     # fitted term, to avoid double-counting).
     if ref_year not in set(out["year"]):
-        ref_row = pd.DataFrame([{
-            "year": ref_year, "coef": 0.0, "se": 0.0, "lower_95": 0.0, "upper_95": 0.0
-        }])
+        ref_row = pd.DataFrame(
+            [{"year": ref_year, "coef": 0.0, "se": 0.0, "lower_95": 0.0, "upper_95": 0.0}]
+        )
         out = pd.concat([ref_row, out], ignore_index=True)
     out = out.sort_values("year").reset_index(drop=True)
     return out
@@ -370,7 +365,11 @@ def plot_event_study(
     # visual reference only — with 14 clusters they are unreliable, so formal
     # inference relies on the wild cluster bootstrap p-values, not this band.
     ax.fill_between(
-        years, lo, hi, alpha=0.18, color="#2C7BB6",
+        years,
+        lo,
+        hi,
+        alpha=0.18,
+        color="#2C7BB6",
         label="95% CI (asymptotic, clustered)",
     )
 
@@ -382,16 +381,7 @@ def plot_event_study(
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.6)
 
     # Policy-period boundary lines + period labels
-    period_labels = [
-        (2008, 2012, "Pre-GreenDeal"),
-        (2013, 2015, "GreenDeal\n/ ECO1"),
-        (2016, 2018, "ECO2"),
-        (2019, 2020, "MEES"),
-        (2021, 2025, "Post-\nStrategy"),
-    ]
-    y_label_pos = ax.get_ylim()[0] if ax.get_ylim()[0] != 0 else lo.min()
-
-    for break_year, label in _PERIOD_BREAKS:
+    for break_year, _label in _PERIOD_BREAKS:
         ax.axvline(
             break_year + 0.5,
             color="grey",
@@ -433,10 +423,12 @@ def plot_event_study(
     ax.legend(loc="best", frameon=False, fontsize=8)
 
     fig.text(
-        0.01, 0.005,
+        0.01,
+        0.005,
         "CI band: asymptotic clustered ±1.96·SE (visual reference only). "
         "Formal inference uses wild cluster bootstrap p-values.",
-        fontsize=7, color="#777777",
+        fontsize=7,
+        color="#777777",
     )
 
     plt.tight_layout()
@@ -467,10 +459,12 @@ def plot_policy_effects(df_eff: pd.DataFrame, title: str, x_label: str, out_path
     ax.set_ylabel("Policy period")
     fig = plt.gcf()
     fig.text(
-        0.01, 0.005,
+        0.01,
+        0.005,
         "Error bars: asymptotic clustered ±1.96·SE (visual reference only). "
         "Formal inference uses wild cluster bootstrap p-values (wcb_pval).",
-        fontsize=7, color="#777777",
+        fontsize=7,
+        color="#777777",
     )
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -510,7 +504,9 @@ def plot_dumbbell_policy(df_a, df_b, label_a, label_b, title, x_label, out_path:
     plt.close()
 
 
-def clustering_from_random_effects(df_panel: pd.DataFrame, out_prefix: str, sample_n: int = 200_000):
+def clustering_from_random_effects(
+    df_panel: pd.DataFrame, out_prefix: str, sample_n: int = 200_000
+):
     # Random-effects model with random slopes over policy periods (sampled for tractability)
     df = df_panel.reset_index().copy()
     if len(df) > sample_n:
@@ -611,9 +607,24 @@ def main() -> None:
     epc_eff.to_csv(TABLE_DIR / "policy_effects_epc.csv", index=False)
     co2_eff.to_csv(TABLE_DIR / "policy_effects_co2.csv", index=False)
     belowc_eff.to_csv(TABLE_DIR / "policy_effects_below_c.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "policy_effects_epc.csv", {"model": "FE", "outcome": "EPC"})
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "policy_effects_co2.csv", {"model": "FE", "outcome": "CO2"})
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "policy_effects_below_c.csv", {"model": "FE", "outcome": "BelowC"})
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "policy_effects_epc.csv",
+        {"model": "FE", "outcome": "EPC"},
+    )
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "policy_effects_co2.csv",
+        {"model": "FE", "outcome": "CO2"},
+    )
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "policy_effects_below_c.csv",
+        {"model": "FE", "outcome": "BelowC"},
+    )
 
     plot_policy_effects(
         co2_eff,
@@ -643,9 +654,18 @@ def main() -> None:
     es_epc_tbl.to_csv(TABLE_DIR / "event_study_epc.csv", index=False)
     es_co2_tbl.to_csv(TABLE_DIR / "event_study_co2.csv", index=False)
     es_belowc_tbl.to_csv(TABLE_DIR / "event_study_belowc.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "event_study_epc.csv", {"model": "ES", "outcome": "EPC"})
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "event_study_co2.csv", {"model": "ES", "outcome": "CO2"})
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "event_study_belowc.csv", {"model": "ES", "outcome": "BelowC"})
+    register_artifact(
+        REGISTRY_PATH, "table", TABLE_DIR / "event_study_epc.csv", {"model": "ES", "outcome": "EPC"}
+    )
+    register_artifact(
+        REGISTRY_PATH, "table", TABLE_DIR / "event_study_co2.csv", {"model": "ES", "outcome": "CO2"}
+    )
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "event_study_belowc.csv",
+        {"model": "ES", "outcome": "BelowC"},
+    )
 
     plot_event_study(
         es_epc_tbl,

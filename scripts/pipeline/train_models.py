@@ -8,41 +8,45 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-
+import shap
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import (
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score,
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
     ConfusionMatrixDisplay,
     RocCurveDisplay,
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
 )
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, train_test_split
 from sklearn.neural_network import MLPRegressor
-
-import shap
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
-import joblib
 
-from config import ROOT, REGISTRY_PATH
+from config import REGISTRY_PATH, ROOT
+from ew_housing_energy_impact.ml import tracking
 from ew_housing_energy_impact.registry import register_artifact
 
-
-DATA_PATH = ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+DATA_PATH = (
+    ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+)
 FIG_DIR = ROOT / "reports" / "figures"
 TABLE_DIR = ROOT / "reports" / "tables"
 ARTIFACT_DIR = ROOT / "reports" / "artifacts"
@@ -94,6 +98,7 @@ def sample_data(
                 "sample_data(df, allow_row_level_split=True)."
             )
         import warnings
+
         warnings.warn(
             "BUILDING_REFERENCE_NUMBER not found — using an explicit row-level split. "
             "Test metrics may be optimistic if properties repeat across years.",
@@ -166,7 +171,80 @@ def evaluate_classifier(name, model, X_test, y_test):
     }
 
 
-def main() -> None:
+def _model_params(model) -> dict:
+    if model is None or not hasattr(model, "get_params"):
+        return {}
+    params = model.get_params(deep=False)
+    return {
+        key: value
+        for key, value in params.items()
+        if isinstance(value, (str, int, float, bool)) or value is None
+    }
+
+
+def log_mlflow_training_outputs(
+    *,
+    reg_results_df: pd.DataFrame,
+    clf_results_df: pd.DataFrame,
+    feature_cols: list[str],
+    target_reg: str,
+    target_clf: str,
+    train_rows: int,
+    test_rows: int,
+    model_lookup: dict[str, object],
+    artifact_lookup: dict[str, list[Path]],
+    force_enable: bool | None = None,
+) -> None:
+    """Optionally log model metrics/artifacts to MLflow without changing training."""
+
+    common = {
+        "features": ",".join(feature_cols),
+        "split_strategy": "BUILDING_REFERENCE_NUMBER property-level split",
+        "random_state": RANDOM_STATE,
+        "train_rows": train_rows,
+        "test_rows": test_rows,
+    }
+
+    for _, row in reg_results_df.iterrows():
+        model_name = str(row["model"])
+        model = model_lookup.get(model_name)
+        params = {
+            **common,
+            "target": target_reg,
+            "hyperparameters": _model_params(model),
+        }
+        metrics = {key: row[key] for key in row.index if key != "model"}
+        tracking.log_training_run(
+            task_type="regression",
+            model_name=model_name,
+            params=params,
+            metrics=metrics,
+            artifact_paths=artifact_lookup.get(model_name, []),
+            model=model,
+            force_enable=force_enable,
+        )
+
+    for _, row in clf_results_df.iterrows():
+        model_name = str(row["model"])
+        model = model_lookup.get(model_name)
+        params = {
+            **common,
+            "target": target_clf,
+            "hyperparameters": _model_params(model),
+        }
+        metrics = {key: row[key] for key in row.index if key != "model"}
+        tracking.log_training_run(
+            task_type="classification",
+            model_name=model_name,
+            params=params,
+            metrics=metrics,
+            artifact_paths=artifact_lookup.get(model_name, []),
+            model=model,
+            force_enable=force_enable,
+        )
+
+
+def main(track: bool | None = None) -> None:
     train_df, test_df = sample_data(load_data())
 
     feature_cols = [
@@ -217,16 +295,21 @@ def main() -> None:
     }
 
     reg_results = []
+    reg_fitted_models = {}
     for name, base_model in reg_models.items():
         pipe = Pipeline(steps=[("preprocess", preprocessor), ("model", base_model)])
         pipe.fit(X_train, y_reg_train)
+        reg_fitted_models[name] = pipe
         reg_results.append(
             evaluate_regression(name, pipe, X_train, y_reg_train, X_test, y_reg_test)
         )
 
     # Tuned GBR
     gbr_pipe = Pipeline(
-        steps=[("preprocess", preprocessor), ("model", GradientBoostingRegressor(random_state=RANDOM_STATE))]
+        steps=[
+            ("preprocess", preprocessor),
+            ("model", GradientBoostingRegressor(random_state=RANDOM_STATE)),
+        ]
     )
     gbr_param_grid = {
         "model__n_estimators": [150, 250, 350],
@@ -238,12 +321,18 @@ def main() -> None:
     )
     gbr_search.fit(X_train, y_reg_train)
     best_gbr = gbr_search.best_estimator_
+    reg_fitted_models["GBR (tuned)"] = best_gbr
     reg_results.append(
         evaluate_regression("GBR (tuned)", best_gbr, X_train, y_reg_train, X_test, y_reg_test)
     )
 
     # Tuned MLP
-    mlp_pipe = Pipeline(steps=[("preprocess", preprocessor), ("model", MLPRegressor(random_state=RANDOM_STATE, early_stopping=True))])
+    mlp_pipe = Pipeline(
+        steps=[
+            ("preprocess", preprocessor),
+            ("model", MLPRegressor(random_state=RANDOM_STATE, early_stopping=True)),
+        ]
+    )
     mlp_param = {
         "model__hidden_layer_sizes": [(128, 64), (64, 32), (128, 32)],
         "model__alpha": [0.0001, 0.001],
@@ -260,6 +349,7 @@ def main() -> None:
     )
     mlp_search.fit(X_train, y_reg_train)
     best_mlp = mlp_search.best_estimator_
+    reg_fitted_models["MLP (tuned)"] = best_mlp
     reg_results.append(
         evaluate_regression("MLP (tuned)", best_mlp, X_train, y_reg_train, X_test, y_reg_test)
     )
@@ -267,7 +357,12 @@ def main() -> None:
     reg_results_df = pd.DataFrame(reg_results).sort_values("rmse_test").reset_index(drop=True)
     TABLE_DIR.mkdir(parents=True, exist_ok=True)
     reg_results_df.to_csv(TABLE_DIR / "regression_model_performance.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "regression_model_performance.csv", {"task": "regression"})
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "regression_model_performance.csv",
+        {"task": "regression"},
+    )
 
     # Feature importance (GBR tuned)
     preprocessor = best_gbr.named_steps["preprocess"]
@@ -278,7 +373,9 @@ def main() -> None:
         "importance", ascending=False
     )
     fi_df.to_csv(TABLE_DIR / "gbr_feature_importance.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "gbr_feature_importance.csv", {"model": "GBR"})
+    register_artifact(
+        REGISTRY_PATH, "table", TABLE_DIR / "gbr_feature_importance.csv", {"model": "GBR"}
+    )
 
     # Grouped importances.
     # OneHotEncoder expands a categorical like MAIN_FUEL_STD into transformed
@@ -289,11 +386,7 @@ def main() -> None:
     raw_features = cat_features + num_features
 
     def get_base_feature(transformed_name: str) -> str:
-        name = (
-            transformed_name.split("__", 1)[1]
-            if "__" in transformed_name
-            else transformed_name
-        )
+        name = transformed_name.split("__", 1)[1] if "__" in transformed_name else transformed_name
         for feature in sorted(raw_features, key=len, reverse=True):
             if name == feature or name.startswith(feature + "_"):
                 return feature
@@ -308,7 +401,9 @@ def main() -> None:
 
     fi_grouped = aggregate_importances(fi_df).sort_values("importance", ascending=False)
     fi_grouped.to_csv(TABLE_DIR / "gbr_feature_importance_grouped.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "gbr_feature_importance_grouped.csv", {"model": "GBR"})
+    register_artifact(
+        REGISTRY_PATH, "table", TABLE_DIR / "gbr_feature_importance_grouped.csv", {"model": "GBR"}
+    )
 
     plt.figure(figsize=(8, 5))
     top = fi_grouped.head(10).sort_values("importance")
@@ -319,7 +414,9 @@ def main() -> None:
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     plt.savefig(FIG_DIR / "figure_5_1_gbr_feature_importance.png", dpi=200)
     plt.close()
-    register_artifact(REGISTRY_PATH, "figure", FIG_DIR / "figure_5_1_gbr_feature_importance.png", {"model": "GBR"})
+    register_artifact(
+        REGISTRY_PATH, "figure", FIG_DIR / "figure_5_1_gbr_feature_importance.png", {"model": "GBR"}
+    )
 
     # SHAP for GBR
     X_train_trans = best_gbr.named_steps["preprocess"].transform(X_train)
@@ -335,12 +432,19 @@ def main() -> None:
     plt.tight_layout()
     plt.savefig(FIG_DIR / "figure_5_2_shap_summary.png", dpi=200)
     plt.close()
-    register_artifact(REGISTRY_PATH, "figure", FIG_DIR / "figure_5_2_shap_summary.png", {"model": "GBR", "type": "shap_summary"})
+    register_artifact(
+        REGISTRY_PATH,
+        "figure",
+        FIG_DIR / "figure_5_2_shap_summary.png",
+        {"model": "GBR", "type": "shap_summary"},
+    )
 
     # --- Classification models ---
     clf_models = {
         "LogisticRegression": LogisticRegression(max_iter=500, n_jobs=-1),
-        "RandomForest": RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=RANDOM_STATE),
+        "RandomForest": RandomForestClassifier(
+            n_estimators=200, n_jobs=-1, random_state=RANDOM_STATE
+        ),
         "GradientBoosting": GradientBoostingClassifier(random_state=RANDOM_STATE),
         "XGBoost": XGBClassifier(
             n_estimators=300,
@@ -361,9 +465,16 @@ def main() -> None:
         clf_results[name] = pipe
         clf_metrics.append(evaluate_classifier(name, pipe, X_test, y_clf_test))
 
-    clf_results_df = pd.DataFrame(clf_metrics).sort_values("roc_auc", ascending=False).reset_index(drop=True)
+    clf_results_df = (
+        pd.DataFrame(clf_metrics).sort_values("roc_auc", ascending=False).reset_index(drop=True)
+    )
     clf_results_df.to_csv(TABLE_DIR / "classification_model_performance.csv", index=False)
-    register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "classification_model_performance.csv", {"task": "classification"})
+    register_artifact(
+        REGISTRY_PATH,
+        "table",
+        TABLE_DIR / "classification_model_performance.csv",
+        {"task": "classification"},
+    )
 
     best_name = clf_results_df.loc[0, "model"]
     best_pipe = clf_results[best_name]
@@ -377,7 +488,12 @@ def main() -> None:
     plt.tight_layout()
     plt.savefig(FIG_DIR / "figure_5_3_xgb_confusion_roc.png", dpi=200)
     plt.close()
-    register_artifact(REGISTRY_PATH, "figure", FIG_DIR / "figure_5_3_xgb_confusion_roc.png", {"model": best_name, "type": "confusion_roc"})
+    register_artifact(
+        REGISTRY_PATH,
+        "figure",
+        FIG_DIR / "figure_5_3_xgb_confusion_roc.png",
+        {"model": best_name, "type": "confusion_roc"},
+    )
 
     # XGBoost feature importance
     if best_name == "XGBoost":
@@ -386,7 +502,9 @@ def main() -> None:
         feature_names_clf = list(ohe.get_feature_names_out(cat_features)) + num_features
         imp = pd.Series(xgb_model.feature_importances_, index=feature_names_clf)
         imp.sort_values(ascending=False).to_csv(TABLE_DIR / "xgb_feature_importance.csv")
-        register_artifact(REGISTRY_PATH, "table", TABLE_DIR / "xgb_feature_importance.csv", {"model": "XGBoost"})
+        register_artifact(
+            REGISTRY_PATH, "table", TABLE_DIR / "xgb_feature_importance.csv", {"model": "XGBoost"}
+        )
 
     # Save models
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -402,8 +520,14 @@ def main() -> None:
 
     # Model cards (markdown)
     MODEL_CARD_DIR.mkdir(parents=True, exist_ok=True)
-    def write_model_card(name: str, metrics: dict, fig_refs: list[str], table_refs: list[str]) -> None:
-        card_path = MODEL_CARD_DIR / f"{name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')}.md"
+
+    def write_model_card(
+        name: str, metrics: dict, fig_refs: list[str], table_refs: list[str]
+    ) -> None:
+        safe_name = (
+            name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+        )
+        card_path = MODEL_CARD_DIR / f"{safe_name}.md"
         lines = [
             f"# Model Card: {name}",
             "",
@@ -430,8 +554,14 @@ def main() -> None:
     write_model_card(
         best_reg["model"],
         best_reg,
-        ["reports/figures/figure_5_1_gbr_feature_importance.png", "reports/figures/figure_5_2_shap_summary.png"],
-        ["reports/tables/regression_model_performance.csv", "reports/tables/gbr_feature_importance_grouped.csv"],
+        [
+            "reports/figures/figure_5_1_gbr_feature_importance.png",
+            "reports/figures/figure_5_2_shap_summary.png",
+        ],
+        [
+            "reports/tables/regression_model_performance.csv",
+            "reports/tables/gbr_feature_importance_grouped.csv",
+        ],
     )
 
     # Explicit GBR card (even if not best)
@@ -441,8 +571,14 @@ def main() -> None:
         write_model_card(
             "GBR (tuned)",
             gbr_metrics,
-            ["reports/figures/figure_5_1_gbr_feature_importance.png", "reports/figures/figure_5_2_shap_summary.png"],
-            ["reports/tables/regression_model_performance.csv", "reports/tables/gbr_feature_importance_grouped.csv"],
+            [
+                "reports/figures/figure_5_1_gbr_feature_importance.png",
+                "reports/figures/figure_5_2_shap_summary.png",
+            ],
+            [
+                "reports/tables/regression_model_performance.csv",
+                "reports/tables/gbr_feature_importance_grouped.csv",
+            ],
         )
 
     best_clf = clf_results_df.iloc[0].to_dict()
@@ -451,6 +587,53 @@ def main() -> None:
         best_clf,
         ["reports/figures/figure_5_3_xgb_confusion_roc.png"],
         ["reports/tables/classification_model_performance.csv"],
+    )
+
+    model_lookup = {
+        **reg_fitted_models,
+        **clf_results,
+    }
+    artifact_lookup = {
+        "GBR (tuned)": [
+            model_gbr_path,
+            TABLE_DIR / "regression_model_performance.csv",
+            TABLE_DIR / "gbr_feature_importance.csv",
+            TABLE_DIR / "gbr_feature_importance_grouped.csv",
+            FIG_DIR / "figure_5_1_gbr_feature_importance.png",
+            FIG_DIR / "figure_5_2_shap_summary.png",
+            MODEL_CARD_DIR / "gbr_tuned.md",
+        ],
+        "MLP (tuned)": [
+            model_mlp_path,
+            TABLE_DIR / "regression_model_performance.csv",
+        ],
+        best_name: [
+            model_xgb_path,
+            TABLE_DIR / "classification_model_performance.csv",
+            FIG_DIR / "figure_5_3_xgb_confusion_roc.png",
+            MODEL_CARD_DIR / f"{best_name.lower().replace(' ', '_').replace('/', '_')}.md",
+        ],
+    }
+    for model_name in reg_results_df["model"]:
+        artifact_lookup.setdefault(
+            str(model_name), [TABLE_DIR / "regression_model_performance.csv"]
+        )
+    for model_name in clf_results_df["model"]:
+        artifact_lookup.setdefault(
+            str(model_name), [TABLE_DIR / "classification_model_performance.csv"]
+        )
+
+    log_mlflow_training_outputs(
+        reg_results_df=reg_results_df,
+        clf_results_df=clf_results_df,
+        feature_cols=feature_cols,
+        target_reg=target_reg,
+        target_clf=target_clf,
+        train_rows=len(train_df),
+        test_rows=len(test_df),
+        model_lookup=model_lookup,
+        artifact_lookup=artifact_lookup,
+        force_enable=track,
     )
 
     print("✓ Predictive modelling completed.")

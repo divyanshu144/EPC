@@ -1,0 +1,2 @@
+{"timestamp_utc":"2026-01-01T00:00:00+00:00","kind":"table","path":"examples/demo_data/reference_features.csv","sha256":null,"metadata":{"synthetic":true,"purpose":"demo"}}
+{"timestamp_utc":"2026-01-01T00:01:00+00:00","kind":"monitoring_report","path":"examples/demo_data/drift_report.json","sha256":null,"metadata":{"synthetic":true,"purpose":"demo"}}

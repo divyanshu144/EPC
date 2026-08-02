@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "checked_at": "2026-01-01T00:00:00+00:00",
+    "should_retrain": true,
+    "severity": "medium",
+    "numeric_alert_count": 2,
+    "categorical_alert_count": 1,
+    "target_alert_count": 1,
+    "coverage_alert": true
+  },
+  "retraining_recommendation": {
+    "should_retrain": true,
+    "severity": "medium",
+    "reasons": [
+      "Synthetic demo drift exceeded configured thresholds."
+    ],
+    "triggered_checks": [
+      "target_drift",
+      "authority_coverage_change"
+    ],
+    "checked_at": "2026-01-01T00:00:00+00:00"
+  },
+  "drift": {
+    "numeric_features": [],
+    "categorical_features": [],
+    "target_drift": [],
+    "coverage": {
+      "alert": true,
+      "triggered_checks": [
+        "authority_coverage_change"
+      ]
+    }
+  },
+  "limitations": [
+    "Synthetic demo file; not real EPC data."
+  ]
+}

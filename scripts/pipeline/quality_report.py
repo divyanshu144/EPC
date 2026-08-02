@@ -8,14 +8,14 @@ Generate a simple HTML data quality dashboard:
 
 from __future__ import annotations
 
-from pathlib import Path
 import pandas as pd
 
 from config import ROOT
 from ew_housing_energy_impact.registry import register_artifact
 
-
-DATA_PATH = ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+DATA_PATH = (
+    ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
+)
 OUT_HTML = ROOT / "reports" / "artifacts" / "data_quality_report.html"
 REGISTRY_PATH = ROOT / "reports" / "artifacts" / "registry.jsonl"
 
@@ -37,10 +37,12 @@ def main() -> None:
         recent = df[df["YEAR"].isin(recent_years)]
         prev = df[~df["YEAR"].isin(recent_years)]
         num_cols = df.select_dtypes(include="number").columns
-        drift = pd.DataFrame({
-            "recent_mean": recent[num_cols].mean(),
-            "prev_mean": prev[num_cols].mean(),
-        })
+        drift = pd.DataFrame(
+            {
+                "recent_mean": recent[num_cols].mean(),
+                "prev_mean": prev[num_cols].mean(),
+            }
+        )
         drift["mean_diff"] = drift["recent_mean"] - drift["prev_mean"]
         drift = drift.sort_values("mean_diff", key=lambda s: s.abs(), ascending=False).head(25)
     else:

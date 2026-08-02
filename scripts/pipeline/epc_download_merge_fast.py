@@ -22,11 +22,11 @@ Usage:
          python -m scripts.pipeline.epc_download_merge_fast
 """
 
-import os
-import glob
 import base64
-import zipfile
 import concurrent.futures as futures
+import glob
+import os
+import zipfile
 
 import pandas as pd
 import requests
@@ -34,13 +34,13 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 from config import (
+    ANALYSIS_AUTHORITIES,
+    CODE_TO_ANALYSIS_AUTHORITY,
+    EPC_MERGED_CSV,
     RAW_BULK_DIR,
     RAW_EXTRACT_DIR,
-    EPC_MERGED_CSV,
     SOUTH_WEST_EPC_AUTHORITIES,
     SOUTH_WEST_EPC_CODES,
-    CODE_TO_ANALYSIS_AUTHORITY,
-    ANALYSIS_AUTHORITIES,
 )
 from scripts.pipeline.schemas import CORE_COLS, CORE_DTYPES
 
@@ -247,9 +247,7 @@ def pick_la_files(files: dict) -> list[str]:
 
 def _missing_analysis_authorities(matched: set[str]) -> list[str]:
     """Analysis authorities with NO matched download file (panel-fatal gaps)."""
-    covered = {
-        CODE_TO_ANALYSIS_AUTHORITY[c] for c in matched if c in CODE_TO_ANALYSIS_AUTHORITY
-    }
+    covered = {CODE_TO_ANALYSIS_AUTHORITY[c] for c in matched if c in CODE_TO_ANALYSIS_AUTHORITY}
     return sorted(set(ANALYSIS_AUTHORITIES) - covered)
 
 
