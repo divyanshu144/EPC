@@ -10,9 +10,15 @@ context ~70% · 30+ min since last update.
 
 ## Current State
 
-Onboarding complete. No feature work in progress.
+Onboarding complete and pushed. No feature work in progress.
 
-- **Branch:** `chore/onboarding-conventions` (branched from `main`, nothing committed yet)
+- **Branch:** `chore/onboarding-conventions`, pushed to `origin` and tracking it.
+  Two commits, both ahead of `main` — **not yet merged, no PR opened.**
+  - `a15b3c7` platform layers (the pre-existing uncommitted build-out)
+  - `8e66fdd` working conventions + session-tracking scaffolding
+- **Excluded from the repo on purpose:** `claude_onboarding.md` is still untracked.
+  It is a personal operating-manual prompt, not project code, and the repo is **public**.
+  Add it deliberately if you want it published.
 - `CLAUDE.md` extended with operating rules, the five new subsystems, and corrected
   environment/Docker/testing facts.
 - Scaffolding created: `tasks/todo.md`, `tasks/lessons.md`, `tasks/agent_memory.md`,
@@ -29,11 +35,16 @@ reviewed or committed. It is all green against the quality gate.
 
 ## Next Action
 
-Nothing is queued. The open decision, when work resumes: **what to do with the large
-uncommitted change set on `main`.** It is coherent and passing, but it is one enormous
-unreviewed blob. Options are to review and split it into themed commits, or commit it
-wholesale as a single "platform build-out" commit. This needs a decision before any new
-feature work, otherwise new changes get tangled into it.
+**Open a PR for `chore/onboarding-conventions` and merge it into `main`**, or say the work
+should stay on the branch. Nothing else is queued.
+
+```
+https://github.com/divyanshu144/EPC/pull/new/chore/onboarding-conventions
+```
+
+Note the platform build-out in `a15b3c7` was authored before this session and has **not
+been code-reviewed** — it passes the quality gate, but passing lint and tests is not the
+same as having been read by anyone. Worth a review pass before it lands on `main`.
 
 ---
 
@@ -48,7 +59,7 @@ Everything modified this session is complete: `CLAUDE.md`, `tasks/*`, `HANDOFF.m
 
 ## Open Questions
 
-1. **The uncommitted change set** — split into reviewed commits, or land as one? (above)
+1. **Merge strategy** — PR and merge to `main`, or hold on the branch? (see Next Action)
 2. **Python version split** — local is Anaconda 3.13.5, CI pins 3.11. Leave as-is and treat
    CI as authoritative, or align local to 3.11 via a dedicated venv? Currently no failures
    trace to this, but it is a latent divergence.
