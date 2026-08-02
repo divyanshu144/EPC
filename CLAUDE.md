@@ -48,15 +48,36 @@ ewhei features          # Impute, add LOG_FLOOR_AREA, POLICY_PERIOD, NEW_BUILD_S
 ewhei eda               # EDA figures and tables -> reports/
 ewhei fe                # Fixed-effects models + event study + clustering -> reports/artifacts/
 ewhei train             # GBR predictive model + SHAP -> reports/artifacts/
+ewhei quality           # HTML data quality report -> reports/artifacts/
 ewhei validate          # Schema / range checks -> reports/artifacts/validation_report.json
 ewhei manifest          # Data manifest -> reports/artifacts/data_manifest.json
 ```
 
+### Platform commands (optional subsystems)
+```bash
+ewhei orchestrate --dry-run   # Print the 11-task Prefect plan without running it
+ewhei orchestrate             # Run the full pipeline under Prefect
+ewhei monitor --dry-run       # Show planned drift-report inputs/outputs
+ewhei monitor                 # Drift report -> reports/artifacts/drift_report.{json,md}
+ewhei db-init                 # Create analytical tables (SQLite default)
+ewhei db-load --dry-run       # Print planned table loads
+ewhei mlflow-info             # Show MLflow config and whether tracking is enabled
+ewhei train --track           # Force-enable MLflow for one training run
+```
+
+All `orchestrate` steps can be skipped individually: `--skip-download`, `--skip-eda`,
+`--skip-policy`, `--skip-training`, `--skip-quality`, `--skip-monitoring`.
+
 ### Make shortcuts
 ```bash
-make install    # pip install -r requirements.txt && pip install -e .
-make test       # pytest
-make validate   # ewhei validate
+make install       # pip install -r requirements.txt && pip install -e .
+make ci            # lint + format-check + test — run this before claiming done
+make lint          # ruff check .
+make format        # ruff format .
+make format-check  # ruff format --check .
+make test          # python -m pytest -q
+make smoke         # CLI --help + all three --dry-run paths
+make validate      # python -m ew_housing_energy_impact validate
 ```
 
 ---
@@ -96,12 +117,48 @@ scripts/pipeline/
   quality_report.py                    # HTML data quality report
 src/ew_housing_energy_impact/
   cli.py                               # ewhei CLI (argparse, delegates to scripts)
+  settings.py                          # Env-driven Settings for optional services
   validation.py                        # Schema/range validation
   manifest.py                          # Data manifest writer
   registry.py                          # Artifact registry (JSONL append)
   logging_utils.py                     # Structured logger setup
   paths.py                             # repo_root() helper
+  orchestration/
+    flows.py                           # epc_pipeline_flow() — Prefect flow
+    tasks.py                           # 11 @task wrappers around pipeline steps
+  db/
+    engine.py                          # get_engine(), create_tables()
+    models.py                          # 5 SQLAlchemy tables (DeclarativeBase)
+    loaders.py                         # refresh_analytics_database() + per-table loaders
+    queries.py                         # Read helpers used by api.py
+  ml/
+    tracking.py                        # MLflow wrappers — all *_safe, no-op when disabled
+  monitoring/
+    drift.py                           # build_drift_report(), TVD + numeric/categorical drift
+    reporting.py                       # run_monitoring(), JSON + Markdown rendering
+    retraining.py                      # recommend_retraining()
+api.py                                 # FastAPI, 11 routes, DB-with-CSV fallback
+app.py                                 # Streamlit dashboard
+dags/etl_epc_pipeline.py               # Tombstone — Airflow is NOT implemented, Prefect is
 ```
+
+### Optional subsystems
+
+The database and MLflow are **optional and default-off**. Every call site degrades to
+CSV/artifact fallback when the service is unavailable, which is why the test suite passes
+with no Postgres and no MLflow server running.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `ENABLE_DATABASE` | `false` | Turns on the analytical DB path |
+| `DATABASE_URL` | `sqlite:///reports/artifacts/ewhei_analytics.db` | Point at Postgres to use it |
+| `ENABLE_MLFLOW` | `false` | Turns on experiment tracking |
+| `MLFLOW_TRACKING_URI` | `file://<repo>/mlruns` | Point at the server for the UI |
+| `MLFLOW_EXPERIMENT_NAME` | `epc-housing-energy` | Experiment name |
+
+Read these through `settings.get_settings()`. Never call `os.getenv` for them directly.
+When adding a call into either subsystem, preserve the fallback — a missing service must
+degrade, never raise.
 
 ---
 
@@ -138,10 +195,26 @@ Split is by `BUILDING_REFERENCE_NUMBER` (property level), not by row. This preve
 ## Testing
 
 ```bash
-pytest                  # runs tests/test_policy.py and tests/test_validation.py
+make ci                 # lint + format-check + test — the full gate, mirrors GitHub Actions
+python -m pytest -q     # 68 tests
 ```
 
-Tests cover `policy_period()` boundary cases and the imputed CSV schema validation. Run tests before and after any changes to `policy.py` or `validation.py`.
+| File | Covers |
+|---|---|
+| `test_policy.py` | `policy_period()` boundary cases |
+| `test_validation.py` | Imputed CSV schema validation |
+| `test_geography.py` | LA → SW analysis-group rollup |
+| `test_db.py` | SQLAlchemy models, loaders, queries |
+| `test_api_database.py` | FastAPI routes incl. DB-unavailable fallback |
+| `test_mlflow_tracking.py` | `*_safe` tracking helpers no-op when disabled |
+| `test_monitoring.py` | Drift metrics, report rendering, retraining recommendation |
+| `test_orchestration.py` | Prefect task/flow wiring and dry-run planning |
+
+`tests/conftest.py` puts the repo root and `src/` on `sys.path`, so tests pass even when
+the editable install is broken. Do not rely on a green test run as proof that `ewhei`
+works — check the CLI separately with `make smoke`.
+
+Run the suite before and after any change to `policy.py` or `validation.py`.
 
 ---
 
@@ -166,17 +239,31 @@ make bash       # shell into ew-notebook container
 make logs       # tail ew-notebook logs
 ```
 
-Services defined in `docker-compose.yml`: `ew-notebook`, `ew-api` (FastAPI, `Dockerfile.api`), `ew-streamlit` (`Dockerfile.streamlit`).
+Services defined in `docker-compose.yml` (service name → container → host port):
+
+| Service | Container | Port | Notes |
+|---|---|---|---|
+| `postgres` | `ewhei-postgres` | 5432 | Postgres 16, healthchecked |
+| `mlflow` | `ewhei-mlflow` | 5000 | Tracking server, SQLite backend |
+| `notebook` | `ew-notebook` | 8888 | Jupyter, built from `Dockerfile` |
+| `api` | `ewhei-api` | 8001 → 8000 | FastAPI, `Dockerfile.api` |
+| `streamlit` | `ewhei-streamlit` | 8501 | `Dockerfile.streamlit` |
+
+`make bash` and `make logs` target the `ew-notebook` container specifically.
 
 ---
 
 ## Key conventions
 
-- **No `sys.path` hacks.** The package is installed editably; imports work without path manipulation.
 - **All paths from `config.py`.** Never hardcode directory paths in pipeline scripts.
 - **All artifacts registered.** Every output file should call `register_artifact(REGISTRY_PATH, ...)` immediately after writing.
 - **Chunked CSV reads.** Large CSVs (merged core, clean SW) are read with `chunksize=1_000_000` to avoid OOM.
 - **No redundant writes.** Each intermediate CSV is written exactly once per pipeline run.
+- **Optional services degrade, never raise.** DB and MLflow call sites must keep their fallback.
+- **Three sanctioned `sys.path` inserts, no more.** `cli.py`, `tests/conftest.py`, and the
+  `PYTHONPATH=src:.` Makefile targets reach the root-level `config` and `scripts.pipeline.*`
+  modules, which are outside the src-layout package. This is why `pyproject.toml` ignores
+  `E402`. Do not add a fourth — import through the package instead.
 
 
 ## Common Gotchas
@@ -184,9 +271,85 @@ Services defined in `docker-compose.yml`: `ew-notebook`, `ew-api` (FastAPI, `Doc
 - Never use `--mode year` unless explicitly asked — disk is limited (~26 GB)
 - Always run `pytest` before and after changes to `policy.py` or `validation.py`
 - Never move 2015 into ECO2 period — boundary is deliberate
+- **A green `pytest` does not prove `ewhei` works.** `conftest.py` patches `sys.path`, so the
+  suite passes even with a broken editable install. Verify the CLI with `make smoke`.
+- **Moving or renaming the repo directory silently breaks `ewhei`.** The editable install
+  records an absolute path; if it no longer resolves, `pip show` still reports the package as
+  installed while every `ewhei` call dies with `ModuleNotFoundError`. Fix: re-run
+  `pip install -e .` from the current directory. See `tasks/lessons.md`.
+- Airflow is **not** implemented. `dags/etl_epc_pipeline.py` is a deliberate tombstone
+  (`AIRFLOW_DAG_IMPLEMENTED = False`). Prefect is the orchestrator.
 
 
 ## Environment
-- Python 3.11
+- **CI runs Python 3.11.** Local dev on this machine is Anaconda **Python 3.13.5**
+  (`/opt/anaconda3/bin/python`). `requires-python = ">=3.11"` permits both, but version-sensitive
+  behaviour will not be caught locally — CI is the authority.
 - Installed as editable package: `pip install -e .`
-- CLI entry point: `ewhei`
+- CLI entry point: `ewhei` (equivalently `python -m ew_housing_energy_impact`)
+- Lint/format: Ruff, line-length 100, rules `E`/`F`/`I`, `notebooks/` excluded
+
+---
+
+## Operating rules (non-negotiable)
+
+**Process skills first.** If a relevant skill exists, invoke it BEFORE acting.
+- New feature / "let's build X" → `brainstorming` (discuss → spec) → `writing-plans` →
+  `subagent-driven-development` (fresh subagent per task, review between tasks) →
+  `finishing-a-development-branch`. **Do not write code until the spec AND the plan are approved.**
+- Bug / failure → `systematic-debugging`: Reproduce → Locate → Isolate → Fix → Verify.
+  Never jump to a fix before isolating; never mark fixed before verifying.
+
+**Plan mode by default.** For anything 3+ steps or architectural, plan and check in BEFORE
+implementing, not during. If it goes sideways mid-task, STOP and re-plan.
+
+**Subagents.** Offload research, codebase exploration, and parallel analysis to subagents to
+keep the main context clean. Main context is for decisions and writing code.
+
+**Core principles.**
+- *Simplicity first* — the smallest change that works.
+- *No laziness* — fix root causes; no workarounds, no deliberate debt.
+- *Minimal impact* — touch only the files the task needs; no drive-by refactors.
+
+**Verification before done.** Never claim done without proof. Run the commands and show the
+output. "It should work" is not verification.
+
+**Git.** Never commit on `main`; branch first. Commit and push only when asked. Use
+`finishing-a-development-branch` to integrate.
+
+**Knowledge graph.** The `code-review-graph` MCP is preferred over Grep/Glob for exploration,
+but check freshness first — a stale graph will silently omit whole subsystems. Rebuild before
+trusting it for impact analysis.
+
+---
+
+## Task & session tracking
+
+| File | Purpose |
+|---|---|
+| `tasks/todo.md` | Plan as a checklist before implementing; mark `[x]` as each finishes — don't batch |
+| `tasks/lessons.md` | Chronological log. After ANY correction or non-obvious discovery, append: what broke / root cause / what to do next time |
+| `tasks/agent_memory.md` | Durable reference: Architecture Decisions, Known Gotchas, Solved Problems, Useful Patterns. Honour locked decisions even if the code suggests otherwise |
+| `HANDOFF.md` | Current state written so a cold-start session can resume |
+| `docs/plans/`, `docs/specs/` | Written specs and implementation plans |
+
+**Update `HANDOFF.md` at every checkpoint:** task complete · milestone done · stop signalled ·
+blocker hit · context ~70% · 30+ min since last update. It must contain: Current State,
+Next Action (immediately actionable), In-Flight files, Open Questions, Verification Baseline.
+
+**At the START of every session:** read `HANDOFF.md`, `tasks/todo.md`, `tasks/lessons.md`,
+`tasks/agent_memory.md`, then run `git status` and `git log -1` and reconcile. **If they
+diverge, the working tree is authoritative.**
+
+---
+
+## Definition of Done
+
+A task is not complete until all of the following hold:
+
+1. `make ci` passes — lint, format-check, and tests (currently **68 passing**).
+2. `make smoke` passes if the CLI surface changed.
+3. New logic has tests.
+4. `HANDOFF.md` reflects the current state.
+
+Run the checks. Do not assert them.
