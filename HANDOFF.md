@@ -10,7 +10,25 @@ context ~70% · 30+ min since last update.
 
 ## Current State
 
-Onboarding complete, merged, and pushed. No feature work in progress.
+**Warehouse migration Phase A: design approved, implementation PAUSED at user's request
+(2026-08-02). Do not auto-resume — wait for the user to pick it up.**
+
+- **Branch:** `feat/warehouse-ingestion`, one commit (`794dabe`), **not pushed, not merged.**
+- **Spec:** `docs/superpowers/specs/2026-08-02-epc-warehouse-ingestion-design.md` — approved.
+- **Nothing implemented.** No code written, no data downloaded, no cloud resources created.
+- Next step when resumed is `writing-plans`, not code.
+
+The plan is a four-phase migration off the pandas/Prefect pipeline onto S3 → Snowflake →
+dbt → Airflow, with an AI lane redesigned around EPC's actual data (EPC has no free text,
+so sentiment analysis and review-RAG were dropped as inapplicable). Phase A is ingestion
+only. Phases B (dbt), C (Airflow cutover), D (AI) each need their own spec first.
+
+Read the spec before doing anything — it records why each decision was made, including the
+ones that went against recommendation.
+
+### Earlier state (still true)
+
+Onboarding complete, merged, and pushed.
 
 - **Branch:** `main`, in sync with `origin/main` at `65f506b`.
   `chore/onboarding-conventions` was fast-forward merged and the local branch deleted.
@@ -38,7 +56,15 @@ reviewed or committed. It is all green against the quality gate.
 
 ## Next Action
 
-Nothing is queued — pick up new work from a fresh branch off `main`.
+**Paused. Nothing to do until the user resumes.**
+
+When they do, in this order:
+
+1. Confirm the four blockers in `tasks/todo.md` are cleared — chiefly `.env` with
+   `EPC_EMAIL` / `EPC_API_KEY`, since `data/` is empty and nothing runs without it.
+2. Invoke `writing-plans` against the approved spec. Do not skip to code.
+3. Snowflake account must be on **AWS / eu-west-2** to match the S3 bucket, or the storage
+   integration pays cross-region egress.
 
 **Carry-over risk:** the platform build-out in `a15b3c7` is now on `main` but has **never
 been code-reviewed**. It passes lint and tests, which is not the same as having been read.
