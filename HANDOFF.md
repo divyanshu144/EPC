@@ -10,12 +10,15 @@ context ~70% · 30+ min since last update.
 
 ## Current State
 
-Onboarding complete and pushed. No feature work in progress.
+Onboarding complete, merged, and pushed. No feature work in progress.
 
-- **Branch:** `chore/onboarding-conventions`, pushed to `origin` and tracking it.
-  Two commits, both ahead of `main` — **not yet merged, no PR opened.**
+- **Branch:** `main`, in sync with `origin/main` at `65f506b`.
+  `chore/onboarding-conventions` was fast-forward merged and the local branch deleted.
+  The remote branch `origin/chore/onboarding-conventions` still exists and is now
+  redundant — safe to delete.
   - `a15b3c7` platform layers (the pre-existing uncommitted build-out)
   - `8e66fdd` working conventions + session-tracking scaffolding
+  - `65f506b` HANDOFF sync
 - **Excluded from the repo on purpose:** `claude_onboarding.md` is still untracked.
   It is a personal operating-manual prompt, not project code, and the repo is **public**.
   Add it deliberately if you want it published.
@@ -35,16 +38,13 @@ reviewed or committed. It is all green against the quality gate.
 
 ## Next Action
 
-**Open a PR for `chore/onboarding-conventions` and merge it into `main`**, or say the work
-should stay on the branch. Nothing else is queued.
+Nothing is queued — pick up new work from a fresh branch off `main`.
 
-```
-https://github.com/divyanshu144/EPC/pull/new/chore/onboarding-conventions
-```
-
-Note the platform build-out in `a15b3c7` was authored before this session and has **not
-been code-reviewed** — it passes the quality gate, but passing lint and tests is not the
-same as having been read by anyone. Worth a review pass before it lands on `main`.
+**Carry-over risk:** the platform build-out in `a15b3c7` is now on `main` but has **never
+been code-reviewed**. It passes lint and tests, which is not the same as having been read.
+It landed on an explicit merge instruction, ahead of any review pass. A retrospective
+review of `db/`, `ml/`, `monitoring/`, and `orchestration/` is the highest-value next task
+if anything in those subsystems starts misbehaving.
 
 ---
 
@@ -59,7 +59,7 @@ Everything modified this session is complete: `CLAUDE.md`, `tasks/*`, `HANDOFF.m
 
 ## Open Questions
 
-1. **Merge strategy** — PR and merge to `main`, or hold on the branch? (see Next Action)
+1. **Retrospective review of `a15b3c7`** — merged unreviewed (see Next Action)
 2. **Python version split** — local is Anaconda 3.13.5, CI pins 3.11. Leave as-is and treat
    CI as authoritative, or align local to 3.11 via a dedicated venv? Currently no failures
    trace to this, but it is a latent divergence.
