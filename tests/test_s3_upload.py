@@ -11,7 +11,16 @@ from ew_housing_energy_impact.ingestion.epc_source import ExtractedSource
 
 
 class FakeClientError(Exception):
-    """Stands in for botocore.exceptions.ClientError."""
+    """Stands in for botocore.exceptions.ClientError, including its error code.
+
+    Real ClientError exposes the AWS error code at exc.response["Error"]["Code"];
+    needs_upload() inspects that to tell "object absent" apart from "permission
+    denied" or other failures, so the fake must carry it too.
+    """
+
+    def __init__(self, code: str = "404"):
+        self.response = {"Error": {"Code": code}}
+        super().__init__(code)
 
 
 class FakeS3:
@@ -23,7 +32,7 @@ class FakeS3:
 
     def head_object(self, Bucket: str, Key: str):
         if Key not in self.existing:
-            raise FakeClientError()
+            raise FakeClientError("404")
         return {"Metadata": {"content-md5": self.existing[Key]}}
 
     def upload_file(self, Filename, Bucket, Key, ExtraArgs=None):
@@ -73,6 +82,23 @@ def test_reuploads_when_content_changed(tmp_path):
 
     assert s3_upload.upload_source(client, "b", src) is True
     assert client.uploads == [("b", key)]
+
+
+def test_permission_error_propagates_instead_of_reuploading(tmp_path):
+    """A non-404 ClientError (e.g. AccessDenied) must surface, not be swallowed
+    into "needs upload" — that would silently re-upload every file whenever
+    head_object fails for a reason unrelated to the object being absent."""
+
+    class DeniedS3(FakeS3):
+        def head_object(self, Bucket: str, Key: str):
+            raise FakeClientError("403")
+
+    client = DeniedS3()
+    src = _source(tmp_path)
+
+    with pytest.raises(FakeClientError):
+        s3_upload.upload_source(client, "b", src)
+    assert client.uploads == []
 
 
 def test_upload_all_counts_both_outcomes(tmp_path):

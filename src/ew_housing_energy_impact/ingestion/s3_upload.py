@@ -32,25 +32,49 @@ def local_md5(path: Path) -> str:
     return digest.hexdigest()
 
 
-def needs_upload(client, bucket: str, key: str, path: Path) -> bool:
-    """True when the object is absent or its stored hash differs from the file."""
+_ABSENT_CODES = {"404", "NoSuchKey"}
+
+
+def _stored_md5(client, bucket: str, key: str) -> str | None:
+    """Stored content-md5 metadata for `key`, or None if the object does not exist.
+
+    Only a genuinely-absent object should read as "needs upload". A permission
+    denial, throttle, or any other ClientError must be re-raised rather than
+    treated the same as "absent" — silently swallowing it would degrade into
+    re-uploading every file on every run, defeating the point of comparing
+    hashes in the first place. head_object reports absence as "404", but the
+    string form varies by botocore version, so "NoSuchKey" is accepted too.
+    """
     try:
         head = client.head_object(Bucket=bucket, Key=key)
-    except ClientError:
-        return True
-    return head.get("Metadata", {}).get(_MD5_METADATA_KEY) != local_md5(path)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code")
+        if code in _ABSENT_CODES:
+            return None
+        raise
+    return head.get("Metadata", {}).get(_MD5_METADATA_KEY)
+
+
+def needs_upload(client, bucket: str, key: str, path: Path) -> bool:
+    """True when the object is absent or its stored hash differs from the file."""
+    return _stored_md5(client, bucket, key) != local_md5(path)
 
 
 def upload_source(client, bucket: str, source: ExtractedSource) -> bool:
-    """Upload one source unless S3 already holds identical content."""
+    """Upload one source unless S3 already holds identical content.
+
+    Hashes the file once and reuses the digest for both the comparison and the
+    upload's metadata, rather than reading a ~122 MB certificate file twice.
+    """
     key = s3_key(source.kind, source.period)
-    if not needs_upload(client, bucket, key, source.path):
+    digest = local_md5(source.path)
+    if _stored_md5(client, bucket, key) == digest:
         return False
     client.upload_file(
         Filename=str(source.path),
         Bucket=bucket,
         Key=key,
-        ExtraArgs={"Metadata": {_MD5_METADATA_KEY: local_md5(source.path)}},
+        ExtraArgs={"Metadata": {_MD5_METADATA_KEY: digest}},
     )
     return True
 
