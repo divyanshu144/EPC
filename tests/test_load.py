@@ -50,6 +50,7 @@ def test_copy_into_binds_by_name_and_aborts_on_error():
     sql = load.copy_into_sql("epc.raw.certificates", "certificates")
     assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in sql
     assert "ON_ERROR = ABORT_STATEMENT" in sql
+    assert "FORCE = TRUE" in sql
     assert "CONTINUE" not in sql
     assert "SKIP_HEADER" not in sql
     assert "@epc.raw.epc_raw_stage/certificates/" in sql
@@ -89,6 +90,37 @@ def test_local_row_count_handles_crlf_with_quoted_newline(tmp_path):
     assert load.local_row_count(p) == 2
 
 
+def test_local_row_count_skips_trailing_blank_line(tmp_path):
+    """Regression test: a stray trailing blank line must not inflate the count.
+
+    Government CSV exports do carry trailing blank lines. csv.reader yields an
+    empty row for one, and a naive `sum(1 for _ in reader)` would count it as a
+    record — the same failure class the quoted-newline handling exists to
+    prevent: a false reconciliation failure on a load that was correct.
+    """
+    p = tmp_path / "c.csv"
+    p.write_text("H1,H2\na,b\nc,d\n\n")
+    assert load.local_row_count(p) == 2
+
+
+def test_table_columns_queries_information_schema():
+    """Regression test: SHOW COLUMNS returns table_name first, not column_name.
+
+    Reading row[0] off `SHOW COLUMNS IN TABLE` would return N copies of the
+    table's own name instead of real column names, silently breaking
+    header_diff. INFORMATION_SCHEMA.COLUMNS has an unambiguous COLUMN_NAME
+    field; pin the emitted SQL so the intent stays correct even though a fake
+    cursor can't validate the real result shape.
+    """
+    cursor = FakeCursor(results=[[("A",), ("B",)]])
+    cols = load.table_columns(cursor, "epc.raw.certificates")
+    assert cols == ["A", "B"]
+    sql = cursor.statements[0]
+    assert "INFORMATION_SCHEMA.COLUMNS" in sql
+    assert "COLUMN_NAME" in sql
+    assert "CERTIFICATES" in sql
+
+
 def test_header_diff_detects_added_and_removed():
     diff = load.header_diff(["A", "B"], ["B", "C"])
     assert diff == {"added": ["C"], "removed": ["A"]}
@@ -96,6 +128,12 @@ def test_header_diff_detects_added_and_removed():
 
 def test_header_diff_is_empty_when_identical_ignoring_order():
     assert load.header_diff(["A", "B"], ["B", "A"]) == {"added": [], "removed": []}
+
+
+def test_header_diff_ignores_case_only_changes():
+    """COPY INTO matches columns case-insensitively, so a pure recase of a
+    column name must not be reported as simultaneously added and removed."""
+    assert load.header_diff(["postcode"], ["POSTCODE"]) == {"added": [], "removed": []}
 
 
 def test_load_kind_fails_on_header_change():
@@ -128,3 +166,19 @@ def test_reconcile_passes_on_match():
 def test_reconcile_raises_on_mismatch():
     with pytest.raises(ValueError, match="certificates"):
         load.reconcile({"certificates": 9}, {"certificates": 10})
+
+
+def test_reconcile_raises_on_unexpected_actual_kind():
+    """Regression test: an extra kind in `actual` must not pass silently.
+
+    Walking only `expected.items()` never notices a kind that appears in
+    `actual` but not in `expected`, which contradicts the "match exactly"
+    promise in the docstring.
+    """
+    with pytest.raises(ValueError, match="recommendations"):
+        load.reconcile({"certificates": 100, "recommendations": 987654}, {"certificates": 100})
+
+
+def test_reconcile_raises_on_missing_expected_kind():
+    with pytest.raises(ValueError, match="certificates"):
+        load.reconcile({}, {"certificates": 100})

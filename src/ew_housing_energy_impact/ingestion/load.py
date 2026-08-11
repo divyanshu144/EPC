@@ -45,6 +45,12 @@ def copy_into_sql(table: str, kind: str) -> str:
     MATCH_BY_COLUMN_NAME requires PARSE_HEADER on the file format. Positional
     binding is unsafe here: every column is STRING, so a reordered export would
     load successfully with values in the wrong columns.
+
+    FORCE = TRUE regardless of Snowflake's own load-history metadata: whether
+    TRUNCATE (or CREATE OR REPLACE) resets that metadata is not something this
+    code should have to get right to behave correctly. TRUNCATE has already
+    guaranteed the target table is empty before COPY runs, so FORCE cannot
+    produce duplicate rows here — it only guarantees the reload happens.
     """
     return (
         f"COPY INTO {table}\n"
@@ -52,7 +58,8 @@ def copy_into_sql(table: str, kind: str) -> str:
         f"FILE_FORMAT = (FORMAT_NAME = '{FILE_FORMAT}')\n"
         f"MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE\n"
         f"PATTERN = '.*{kind}[.]csv'\n"
-        f"ON_ERROR = ABORT_STATEMENT"
+        f"ON_ERROR = ABORT_STATEMENT\n"
+        f"FORCE = TRUE"
     )
 
 
@@ -64,6 +71,11 @@ def local_row_count(path: Path) -> int:
     count and fail reconciliation on a load that was correct. `newline=""` is
     required: without it, universal-newline translation breaks the csv module's
     own quoted-newline handling.
+
+    Blank rows are skipped for the same reason: a stray trailing blank line —
+    which government CSV exports do carry — parses to an empty row and would
+    otherwise inflate the count by one, again failing reconciliation on a load
+    that was correct.
     """
     with open(path, newline="", encoding="utf-8", errors="replace") as handle:
         reader = csv.reader(handle)
@@ -71,21 +83,45 @@ def local_row_count(path: Path) -> int:
             next(reader)
         except StopIteration:
             return 0
-        return sum(1 for _ in reader)
+        return sum(1 for row in reader if row)
 
 
 def table_columns(cursor, table: str) -> list[str]:
-    """Column names of an existing table, empty if it does not exist yet."""
-    rows = cursor.execute(f"SHOW COLUMNS IN TABLE {table}").fetchall()
+    """Column names of an existing table, empty if it does not exist yet.
+
+    Queries INFORMATION_SCHEMA.COLUMNS rather than `SHOW COLUMNS IN TABLE`.
+    SHOW COLUMNS returns `table_name` as its first result column and
+    `column_name` third, so naively reading the first field back would return
+    N copies of the table's own name instead of real column names —
+    silently breaking header_diff, the entire schema-drift safety net.
+    INFORMATION_SCHEMA.COLUMNS has one stable, documented COLUMN_NAME field.
+    Snowflake stores unquoted identifiers upper-cased, so the bare table name
+    is upper-cased to match.
+    """
+    bare_name = table.rsplit(".", 1)[-1].upper()
+    sql = (
+        f"SELECT COLUMN_NAME FROM {DATABASE}.INFORMATION_SCHEMA.COLUMNS\n"
+        f"WHERE TABLE_SCHEMA = '{RAW_SCHEMA.upper()}' AND TABLE_NAME = '{bare_name}'\n"
+        f"ORDER BY ORDINAL_POSITION"
+    )
+    rows = cursor.execute(sql).fetchall()
     return [row[0] for row in rows] if rows else []
 
 
 def header_diff(existing: list[str], incoming: list[str]) -> dict[str, list[str]]:
-    """Set difference between an existing table's columns and a file's header."""
-    return {
-        "added": sorted(set(incoming) - set(existing)),
-        "removed": sorted(set(existing) - set(incoming)),
-    }
+    """Set difference between an existing table's columns and a file's header.
+
+    Compares case-insensitively. COPY INTO uses MATCH_BY_COLUMN_NAME =
+    CASE_INSENSITIVE, so a source recasing a column (postcode -> POSTCODE)
+    changes nothing at load time. Comparing raw sets would report that as
+    simultaneously added and removed, forcing a spurious
+    --allow-schema-change for a load that needs none.
+    """
+    existing_upper = {name.upper() for name in existing}
+    incoming_upper = {name.upper() for name in incoming}
+    added = sorted(name for name in incoming if name.upper() not in existing_upper)
+    removed = sorted(name for name in existing if name.upper() not in incoming_upper)
+    return {"added": added, "removed": removed}
 
 
 def load_kind(
@@ -96,11 +132,13 @@ def load_kind(
 ) -> int:
     """Create if absent, truncate, load one raw table. Returns its row count.
 
-    TRUNCATE precedes COPY INTO deliberately. Snowflake's COPY load metadata
-    expires after 64 days, so relying on skip-already-loaded is correct for 64
-    days and silently duplicates rows afterwards. EPC archives are complete
-    snapshots per period, so a full refresh is both correct and deterministic.
-    TRUNCATE also clears the load metadata, so COPY reloads without FORCE.
+    TRUNCATE precedes COPY INTO deliberately: EPC archives are complete
+    snapshots per period, so a full refresh is correct and deterministic,
+    regardless of how long Snowflake's own COPY load-history metadata persists
+    or when it expires. `copy_into_sql` also sets FORCE = TRUE so the reload
+    happens either way — this code does not need to be right about Snowflake's
+    metadata semantics to be correct, since TRUNCATE has already guaranteed an
+    empty target and FORCE therefore cannot produce duplicate rows.
 
     A header change fails rather than being absorbed silently: on a full-refresh
     pipeline a dropped source column would vanish from raw and resurface later as
@@ -134,17 +172,31 @@ def load_kind(
 
 
 def reconcile(actual: dict[str, int], expected: dict[str, int]) -> None:
-    """Fail unless warehouse counts match local counts exactly.
+    """Fail unless warehouse counts match local counts exactly, kind for kind.
 
     A zero exit from COPY INTO is not evidence of a correct load. This compares
     an independent local count against the warehouse; Snowflake's own
     rows_loaded would be Snowflake checking itself and could not detect a
     truncated upload.
+
+    Checks the kind sets in both directions, not just the counts for kinds
+    named in `expected`. Walking only `expected.items()` would let an `actual`
+    carrying an unexpected extra kind pass silently, which contradicts an
+    "exact match" promise.
     """
+    problems = []
+    missing = sorted(set(expected) - set(actual))
+    if missing:
+        problems.append(f"missing from warehouse: {missing}")
+    unexpected = sorted(set(actual) - set(expected))
+    if unexpected:
+        problems.append(f"unexpected in warehouse: {unexpected}")
     mismatches = [
-        f"{kind}: warehouse={actual.get(kind)} local={count}"
+        f"{kind}: warehouse={actual[kind]} local={count}"
         for kind, count in expected.items()
-        if actual.get(kind) != count
+        if kind in actual and actual[kind] != count
     ]
     if mismatches:
-        raise ValueError("Row count reconciliation failed — " + "; ".join(mismatches))
+        problems.append("count mismatches — " + "; ".join(mismatches))
+    if problems:
+        raise ValueError("Row count reconciliation failed — " + "; ".join(problems))
