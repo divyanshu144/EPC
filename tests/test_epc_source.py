@@ -64,3 +64,50 @@ def test_compat_shim_exposes_the_same_objects():
 
     assert legacy.extract_all_zips is epc_source.extract_all_zips
     assert legacy._is_valid_zip is epc_source._is_valid_zip
+
+
+def test_iter_extracted_sources_finds_both_kinds(tmp_path):
+    d = tmp_path / "domestic-2025-09"
+    d.mkdir()
+    (d / "certificates.csv").write_text("LMK_KEY\n1\n")
+    (d / "recommendations.csv").write_text("LMK_KEY\n1\n")
+    (d / "columns.csv").write_text("ignored\n")
+    (d / "schema.json").write_text("{}")
+
+    found = epc_source.iter_extracted_sources(tmp_path)
+
+    assert {(s.period, s.kind) for s in found} == {
+        ("2025-09", "certificates"),
+        ("2025-09", "recommendations"),
+    }
+
+
+def test_iter_extracted_sources_skips_metadata_only_folders(tmp_path):
+    """2008-2024 folders in `data copy` hold metadata but no certificates."""
+    d = tmp_path / "domestic-2015"
+    d.mkdir()
+    (d / "columns.csv").write_text("x\n")
+    (d / "schema.json").write_text("{}")
+
+    assert epc_source.iter_extracted_sources(tmp_path) == []
+
+
+def test_iter_extracted_sources_ignores_non_domestic_folders(tmp_path):
+    d = tmp_path / "notes"
+    d.mkdir()
+    (d / "certificates.csv").write_text("LMK_KEY\n1\n")
+
+    assert epc_source.iter_extracted_sources(tmp_path) == []
+
+
+def test_iter_extracted_sources_is_sorted_by_period(tmp_path):
+    for period in ("2025-09", "2025-01", "2025-05"):
+        d = tmp_path / f"domestic-{period}"
+        d.mkdir()
+        (d / "certificates.csv").write_text("LMK_KEY\n1\n")
+
+    assert [s.period for s in epc_source.iter_extracted_sources(tmp_path)] == [
+        "2025-01",
+        "2025-05",
+        "2025-09",
+    ]

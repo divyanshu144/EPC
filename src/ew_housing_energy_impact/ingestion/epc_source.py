@@ -14,6 +14,8 @@ import glob
 import os
 import re
 import zipfile
+from pathlib import Path
+from typing import NamedTuple
 
 import requests
 from tqdm import tqdm
@@ -159,3 +161,34 @@ def _missing_analysis_authorities(matched: set[str]) -> list[str]:
     """Analysis authorities with NO matched download file (panel-fatal gaps)."""
     covered = {CODE_TO_ANALYSIS_AUTHORITY[c] for c in matched if c in CODE_TO_ANALYSIS_AUTHORITY}
     return sorted(set(ANALYSIS_AUTHORITIES) - covered)
+
+
+SOURCE_KINDS = ("certificates", "recommendations")
+
+
+class ExtractedSource(NamedTuple):
+    """One extracted CSV belonging to one source period."""
+
+    period: str
+    kind: str
+    path: Path
+
+
+def iter_extracted_sources(root: Path | None = None) -> list[ExtractedSource]:
+    """List every certificates/recommendations CSV under the extract root.
+
+    Folders holding only metadata (columns.csv, schema.json, LICENCE.txt) yield
+    nothing — that is the state of the 2008-2024 folders locally, where the CSVs
+    were deleted to reclaim disk.
+    """
+    base = Path(root) if root is not None else Path(RAW_EXTRACT_DIR)
+    sources: list[ExtractedSource] = []
+    for folder in sorted(p for p in base.iterdir() if p.is_dir()):
+        period = period_from_name(folder.name)
+        if period is None:
+            continue
+        for kind in SOURCE_KINDS:
+            csv_path = folder / f"{kind}.csv"
+            if csv_path.exists():
+                sources.append(ExtractedSource(period, kind, csv_path))
+    return sources
