@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from ew_housing_energy_impact.paths import repo_root
@@ -114,6 +115,50 @@ def cmd_db_load(dry_run: bool = False) -> None:
     setup_logger().info("Database load result: %s", result)
 
 
+def cmd_ingest(dry_run: bool = False, allow_schema_change: bool = False) -> None:
+    from ew_housing_energy_impact.ingestion.epc_source import iter_extracted_sources
+    from ew_housing_energy_impact.ingestion.pipeline import run_ingest
+    from ew_housing_energy_impact.settings import get_settings
+
+    settings = get_settings()
+    sources = iter_extracted_sources()
+
+    if dry_run:
+        result = run_ingest(None, None, settings.s3_bucket, sources, dry_run=True)
+    else:
+        import boto3
+        import snowflake.connector
+        from botocore.config import Config
+
+        # Spec section 6: 3 attempts with exponential backoff on transient S3
+        # errors. botocore's standard retry mode implements exactly that, so
+        # configure it rather than hand-rolling a loop around upload_file.
+        s3_config = Config(retries={"max_attempts": 3, "mode": "standard"})
+
+        connection = snowflake.connector.connect(
+            account=os.environ["SNOWFLAKE_ACCOUNT"],
+            user=os.environ["SNOWFLAKE_USER"],
+            password=os.environ["SNOWFLAKE_PASSWORD"],
+            warehouse="epc_wh",
+            database="epc",
+            schema="raw",
+            role="epc_dbt_role",
+        )
+        try:
+            result = run_ingest(
+                boto3.client("s3", config=s3_config),
+                connection.cursor(),
+                settings.s3_bucket,
+                sources,
+                allow_schema_change=allow_schema_change,
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    setup_logger().info("Ingest result: %s", result)
+
+
 def cmd_mlflow_info() -> None:
     from ew_housing_energy_impact.ml.tracking import is_mlflow_enabled
     from ew_housing_energy_impact.settings import get_settings
@@ -187,6 +232,17 @@ def main() -> None:
         "--dry-run",
         action="store_true",
         help="Print planned table loads without modifying the database",
+    )
+    ingest = sub.add_parser("ingest", help="Upload EPC sources to S3 and load Snowflake raw")
+    ingest.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned uploads and expected row counts without touching S3 or Snowflake",
+    )
+    ingest.add_argument(
+        "--allow-schema-change",
+        action="store_true",
+        help="Accept a changed source header instead of failing",
     )
     orchestrate = sub.add_parser("orchestrate", help="Run the Prefect-orchestrated pipeline")
     orchestrate.add_argument("--mode", choices=["la", "year"], default="la", help=_MODE_HELP)
@@ -270,6 +326,8 @@ def main() -> None:
         cmd_db_init()
     elif args.cmd == "db-load":
         cmd_db_load(dry_run=args.dry_run)
+    elif args.cmd == "ingest":
+        cmd_ingest(dry_run=args.dry_run, allow_schema_change=args.allow_schema_change)
     elif args.cmd == "mlflow-info":
         cmd_mlflow_info()
 
