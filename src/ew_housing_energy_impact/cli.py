@@ -224,8 +224,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     _MODE_HELP = (
-        "'la' (default): download only SW LA zips (~200 MB). "
-        "'year': full annual E&W bulk zips (~6.7 GB)."
+        "Retained for backward compatibility only. The EPC API now serves one "
+        "national archive per period rather than per-authority zips, so this no "
+        "longer changes what is downloaded. Slated for removal in Phase C."
     )
     run_all = sub.add_parser("run-all", help="Run the full report pipeline")
     run_all.add_argument("--mode", choices=["la", "year"], default="la", help=_MODE_HELP)

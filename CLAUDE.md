@@ -252,15 +252,19 @@ Run the suite before and after any change to `policy.py` or `validation.py`.
 
 ## Download modes
 
-**Obsolete as of 2026-08-11.** The EPC service moved to GOV.UK
-(`epc.opendatacommunities.org` now 301-redirects to
+**Vestigial as of 2026-08-11 — the flag still exists but no longer does anything.** The EPC
+service moved to GOV.UK (`epc.opendatacommunities.org` now 301-redirects to
 `get-energy-performance-data.communities.gov.uk`) and no longer serves per-local-authority
-zips. `--mode la` / `--mode year` are gone — the bulk endpoint
-(`GET /api/files/domestic/csv`) serves **one national archive, split by period**
+zips. `--mode la` / `--mode year` are **still registered and accepted** by `ewhei download`,
+`ewhei run-all` and `ewhei orchestrate` (`cli.py`'s `_MODE_HELP`, default `la`), and
+`orchestrate --dry-run` still reports `'mode': 'la'` in its plan — but the choice no longer
+selects between per-authority and national archives, because the bulk endpoint
+(`GET /api/files/domestic/csv`) now serves **one national archive, split by period**
 (~2.92 GB compressed, regenerated monthly), not one archive per LA and not one per year
-selectable independently. `main(mode=...)` in `epc_download_merge_fast.py` still accepts a
-`mode` argument for backward compatibility with existing callers, but it no longer changes
-behaviour. Auth is `Bearer <EPC_BEARER_TOKEN>`, not `Basic base64(email:api_key)` — see
+selectable independently. `main(mode=...)` in `epc_download_merge_fast.py` accepts the
+argument for backward compatibility with existing callers but ignores it. Both flags are
+slated for removal in Phase C (Airflow cutover), when the CLI surface gets revisited anyway.
+Auth is `Bearer <EPC_BEARER_TOKEN>`, not `Basic base64(email:api_key)` — see
 `tasks/lessons.md` (2026-08-11 entry) for the full story and `docs/ingestion.md` for how the
 downloaded archives move on into S3 and Snowflake via `ewhei ingest`.
 
@@ -309,8 +313,9 @@ Services defined in `docker-compose.yml` (service name → container → host po
 
 ## Common Gotchas
 - Never redefine `ARTIFACTS_DIR` or `REGISTRY_PATH` inline — always import from `config.py`
-- `--mode la` / `--mode year` no longer exist — the EPC API serves one national archive per
-  period now. See Download modes.
+- `--mode la` / `--mode year` still exist as CLI flags but no longer change behaviour — the
+  EPC API serves one national archive per period now, regardless of the choice. See
+  Download modes.
 - Always run `pytest` before and after changes to `policy.py` or `validation.py`
 - Never move 2015 into ECO2 period — boundary is deliberate
 - **A green `pytest` does not prove `ewhei` works.** `conftest.py` patches `sys.path`, so the

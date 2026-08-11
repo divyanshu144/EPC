@@ -9,14 +9,20 @@ EPC archives -> S3 -> Snowflake raw, with reconciliation proving the load.
 
 One-time Snowflake and IAM setup: see `snowflake/README.md`.
 
-Required environment variables (read through `settings.get_settings()`, never
-`os.getenv` at the call site):
+Required environment variables. Where each is read is not uniform — a known wrinkle, not a
+typo — so check the right place if a credential problem shows up:
 
-| Variable | Purpose |
-|---|---|
-| `EPC_BEARER_TOKEN` | Auth for the EPC download step (`ewhei download`), obtained from the account page. Not needed for `ewhei ingest` itself if extracted sources already exist on disk. |
-| `EPC_S3_BUCKET` | Defaults to `epc-sw-pipeline-dev` if unset. |
-| `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` | Required for the non-dry-run path. Missing any of them raises one `ValueError` naming all that are absent, before touching S3 or Snowflake. |
+| Variable | Purpose | Read via |
+|---|---|---|
+| `EPC_BEARER_TOKEN` | Auth for the EPC download step (`ewhei download`), obtained from the account page. Not needed for `ewhei ingest` itself if extracted sources already exist on disk. | `settings.get_settings()` |
+| `EPC_S3_BUCKET` | Defaults to `epc-sw-pipeline-dev` if unset. | `settings.get_settings()` |
+| `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` | Required for the non-dry-run path. | `os.environ` directly, inside `_require_snowflake_credentials()` in `cli.py` |
+
+Only `EPC_BEARER_TOKEN` and `EPC_S3_BUCKET` go through `settings.get_settings()`; the three
+Snowflake variables are read with `os.environ.get(...)` / `os.environ[...]` at the call site
+in `cli.py`, not through `Settings`. Missing any of the three Snowflake variables raises one
+`ValueError` naming all that are absent, before touching S3 or Snowflake — that check happens
+regardless of which mechanism reads the value.
 
 `ewhei ingest` reads whatever `iter_extracted_sources()` finds under
 `RAW_EXTRACT_DIR` — it does not download anything itself. `--dry-run` builds

@@ -90,9 +90,13 @@ didn't error; it proved nothing about what came back.
    South West filtering moved downstream into dbt staging, since there is no longer a
    per-LA file to filter at ingestion.
 3. **Redirect behaviour is correct, not a bug.** `requests` strips the `Authorization`
-   header across this cross-host redirect. That is the right behaviour here: the 302 leads
-   to a presigned S3 URL that carries its own credentials in the query string, and forwarding
-   a bearer token to S3 would be both wrong and a credential leak.
+   header across this cross-host redirect. That is the right behaviour here: per the API's
+   documentation the 302 leads to a presigned S3 URL carrying its own credentials in the
+   query string, and forwarding a bearer token to S3 would be both wrong and a credential
+   leak. **Not independently observed** — the endpoint returns 403 without a bearer token,
+   which nobody on this task has obtained yet, so this is what the docs describe rather than
+   something we watched happen. The 301 from `epc.opendatacommunities.org` above, by
+   contrast, was confirmed directly.
 
 **What to do next time.**
 - A passing `raise_for_status()` does not prove you got JSON back. Check `Content-Type`
