@@ -12,7 +12,7 @@
 
 - Spec: `docs/superpowers/specs/2026-08-02-epc-warehouse-ingestion-design.md`, **as amended 2026-08-11 (§0)**. Decision IDs D1–D16 refer to it.
 - **All new unit tests run offline.** CI has no AWS, Snowflake, or EPC credentials. Integration tests go behind `@pytest.mark.integration`, deselected by default.
-- **The existing 68 tests must keep passing at every commit**, except the two explicitly retired in Task 1.
+- **The existing 68 tests must keep passing at every commit**, except the one explicitly retired in Task 1.
 - Raw tables are typed **all `STRING`** (D7) and take **every column** (D6): certificates 93, recommendations 7.
 - Columns bind **by name** — `PARSE_HEADER = TRUE` + `MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE` (D15). `SKIP_HEADER` and `ERROR_ON_COLUMN_COUNT_MISMATCH` are **removed**.
 - Row counting is **quote-aware** via `csv.reader` opened with `newline=""` (D16). Never count lines.
@@ -41,7 +41,7 @@
 | `src/ew_housing_energy_impact/ingestion/pipeline.py` | Wiring, stage preflight, post-load authority coverage |
 | `snowflake/01_setup.sql`, `02_storage_integration.sql`, `03_stage_and_format.sql`, `README.md` | Hand-applied DDL and runbook |
 | `tests/test_epc_source.py`, `test_s3_upload.py`, `test_load.py`, `test_ingestion_pipeline.py` | Offline tests |
-| `tests/test_geography.py` | **Modify** — imports only; delete 2 tests covering retired functions |
+| `tests/test_geography.py` | **Modify** — imports only; delete the 1 test covering a retired function |
 | `scripts/pipeline/epc_download_merge_fast.py` | **Modify** — shim to moved functions, keep merge half working |
 | `src/ew_housing_energy_impact/cli.py`, `settings.py`, `Makefile` | **Modify** — `ewhei ingest`, bucket + token settings, smoke dry-run |
 | `docs/ingestion.md` | Explains the decisions to a future reader |
@@ -57,7 +57,7 @@
 
 **Interfaces:**
 - Consumes: `config.RAW_BULK_DIR`, `config.RAW_EXTRACT_DIR`, `settings.get_settings`
-- Produces: `auth_headers() -> dict`, `period_from_name(name: str) -> str | None`, `_is_valid_zip(path) -> bool`, `download_one_file(args) -> str`, `download_all(headers, candidates) -> None`, `extract_all_zips() -> None`, `ensure_dirs() -> None`, `API_BASE: str`
+- Produces: `auth_headers() -> dict`, `period_from_name(name: str) -> str | None`, `_is_valid_zip(path) -> bool`, `download_one_file(args) -> str`, `download_all(headers, candidates) -> None`, `extract_all_zips() -> None`, `ensure_dirs() -> None`, `_missing_analysis_authorities(matched: set[str]) -> list[str]`, `API_BASE: str`
 
 **Retired, not moved (D5/D13):** `pick_la_files`, `_matched_codes`, and Basic-auth `auth_headers`. There are no per-authority files to select and the auth scheme changed.
 
@@ -139,7 +139,7 @@ Create `src/ew_housing_energy_impact/ingestion/__init__.py`:
 """EPC ingestion: source download, S3 upload, and warehouse load."""
 ```
 
-Create `src/ew_housing_energy_impact/ingestion/epc_source.py`. **Move verbatim** from `scripts/pipeline/epc_download_merge_fast.py`: `_is_valid_zip`, `download_one_file`, `download_all`, `extract_all_zips`, and `ensure_dirs` (dropping its `EPC_MERGED_CSV.parent` line — the merged CSV is Phase B's concern). Then add the new header:
+Create `src/ew_housing_energy_impact/ingestion/epc_source.py`. **Move verbatim** from `scripts/pipeline/epc_download_merge_fast.py`: `_is_valid_zip`, `download_one_file`, `download_all`, `extract_all_zips`, `_missing_analysis_authorities` (still needed — Task 6 checks authority coverage after the load), and `ensure_dirs` (dropping its `EPC_MERGED_CSV.parent` line — the merged CSV is Phase B's concern). Then add the new header:
 
 ```python
 """Download, validate and extract EPC bulk source archives.
@@ -163,7 +163,12 @@ from pathlib import Path
 import requests
 from tqdm import tqdm
 
-from config import RAW_BULK_DIR, RAW_EXTRACT_DIR
+from config import (
+    ANALYSIS_AUTHORITIES,
+    CODE_TO_ANALYSIS_AUTHORITY,
+    RAW_BULK_DIR,
+    RAW_EXTRACT_DIR,
+)
 
 API_BASE = "https://api.get-energy-performance-data.communities.gov.uk"
 DOMESTIC_CSV_ENDPOINT = f"{API_BASE}/api/files/domestic/csv"
@@ -239,11 +244,11 @@ Change the import on line 13 to:
 from ew_housing_energy_impact.ingestion import epc_source as dl  # noqa: F401
 ```
 
-**Delete** these two tests — they cover functions retired in Step 5:
-- `test_pick_la_files_selects_by_district_code`
-- `test_missing_analysis_authorities_detection`
+**Delete one test** — `test_pick_la_files_selects_by_district_code`, whose function is retired in Step 5.
 
-Change **nothing else**. The remaining seven assertions must pass unmodified; if one needs changing, the split went wrong — stop and investigate.
+**Keep `test_missing_analysis_authorities_detection`.** That function is not dead: Task 6 uses it to verify authority coverage after the load. It moves to `epc_source` with the rest, so the test needs the new import and nothing more.
+
+Change **nothing else**. The remaining eight assertions must pass unmodified; if one needs changing, the split went wrong — stop and investigate.
 
 - [ ] **Step 7: Add the shim identity test**
 
@@ -269,7 +274,7 @@ In `settings.py`, add `epc_bearer_token: str` to `Settings` and populate it:
 - [ ] **Step 9: Run the suite**
 
 Run: `make ci`
-Expected: ruff clean, **79 passed** — 68 existing, minus 2 deleted, plus 13 new
+Expected: ruff clean, **80 passed** — 68 existing, minus 1 deleted, plus 13 new
 (`test_period_from_name` is parametrized over 7 cases, so it contributes 7).
 
 - [ ] **Step 10: Commit**
@@ -388,7 +393,7 @@ def iter_extracted_sources(root: Path | None = None) -> list[ExtractedSource]:
 - [ ] **Step 4: Run tests**
 
 Run: `make ci`
-Expected: **83 passed**.
+Expected: **84 passed**.
 
 - [ ] **Step 5: Commit**
 
@@ -583,7 +588,7 @@ Add `"boto3>=1.35"` to `dependencies` in `pyproject.toml` and to `requirements.t
 - [ ] **Step 5: Run tests**
 
 Run: `pip install -e . && make ci`
-Expected: **88 passed**.
+Expected: **89 passed**.
 
 - [ ] **Step 6: Commit**
 
@@ -1080,7 +1085,7 @@ def reconcile(actual: dict[str, int], expected: dict[str, int]) -> None:
 - [ ] **Step 4: Run tests**
 
 Run: `make ci`
-Expected: **103 passed**.
+Expected: **104 passed**.
 
 - [ ] **Step 5: Commit**
 
@@ -1205,9 +1210,11 @@ Create `src/ew_housing_energy_impact/ingestion/pipeline.py`:
 
 from __future__ import annotations
 
-from config import ANALYSIS_AUTHORITIES, CODE_TO_ANALYSIS_AUTHORITY
-
-from ew_housing_energy_impact.ingestion.epc_source import SOURCE_KINDS, ExtractedSource
+from ew_housing_energy_impact.ingestion.epc_source import (
+    SOURCE_KINDS,
+    ExtractedSource,
+    _missing_analysis_authorities,
+)
 from ew_housing_energy_impact.ingestion.load import (
     STAGE,
     load_kind,
@@ -1217,12 +1224,6 @@ from ew_housing_energy_impact.ingestion.load import (
     reconcile,
 )
 from ew_housing_energy_impact.ingestion.s3_upload import s3_key, upload_all
-
-
-def _missing_analysis_authorities(codes: set[str]) -> list[str]:
-    """Analysis authorities with no matching local authority code in the data."""
-    covered = {CODE_TO_ANALYSIS_AUTHORITY[c] for c in codes if c in CODE_TO_ANALYSIS_AUTHORITY}
-    return sorted(set(ANALYSIS_AUTHORITIES) - covered)
 
 
 def ingest_plan(sources: list[ExtractedSource], bucket: str) -> dict:
@@ -1400,7 +1401,7 @@ Append to `smoke` in the `Makefile`:
 - [ ] **Step 7: Run everything**
 
 Run: `make ci && make smoke`
-Expected: **111 passed**; `make smoke` prints the ingest plan without error.
+Expected: **112 passed**; `make smoke` prints the ingest plan without error.
 
 An empty plan is correct until `data copy/raw/ew_extracted/` is pointed at or repopulated — not a failure.
 
