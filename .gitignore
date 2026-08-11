@@ -8,6 +8,11 @@ __pycache__/
 # data & outputs
 data/**
 !data/.gitkeep
+# `data/**` does not match sibling copies such as "data copy/". Ignore any
+# directory whose name starts with "data" so a stray Finder duplicate cannot be
+# committed to what is a public repository.
+data*/
+!data/
 reports/**
 !reports/.gitkeep
 logs/**
