@@ -82,6 +82,13 @@ def run_ingest(
     if not sources:
         raise ValueError("No extracted sources found — run the download step first")
 
+    # Upload runs before preflight_stage even though checking the stage first
+    # would fail faster on a broken storage integration. LIST @stage on a first
+    # run — before anything has ever been uploaded — returns empty too, and
+    # would be indistinguishable from a broken integration; there is no way to
+    # tell those apart without uploading first. A re-run after fixing a broken
+    # integration re-uploads nothing, since upload_all (s3_upload.py) skips any
+    # file whose stored content-md5 already matches.
     upload_result = upload_all(s3_client, bucket, sources)
     staged_files = preflight_stage(cursor)
 

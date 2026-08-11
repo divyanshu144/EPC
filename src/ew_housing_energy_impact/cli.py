@@ -115,6 +115,27 @@ def cmd_db_load(dry_run: bool = False) -> None:
     setup_logger().info("Database load result: %s", result)
 
 
+_SNOWFLAKE_ENV_VARS = ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD")
+
+
+def _require_snowflake_credentials() -> dict[str, str]:
+    """Snowflake connect() kwargs from the environment, or a clear ValueError.
+
+    Mirrors epc_source.auth_headers(): reading os.environ[...] directly would
+    surface a missing variable as an opaque KeyError from inside connect().
+    Checking all three up front names every missing one in a single message.
+    """
+    missing = [name for name in _SNOWFLAKE_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        raise ValueError(
+            f"Missing Snowflake credentials: {', '.join(missing)} — set them in the "
+            "environment before running `ewhei ingest`."
+        )
+    return {
+        name.lower().removeprefix("snowflake_"): os.environ[name] for name in _SNOWFLAKE_ENV_VARS
+    }
+
+
 def cmd_ingest(dry_run: bool = False, allow_schema_change: bool = False) -> None:
     from ew_housing_energy_impact.ingestion.epc_source import iter_extracted_sources
     from ew_housing_energy_impact.ingestion.pipeline import run_ingest
@@ -130,30 +151,41 @@ def cmd_ingest(dry_run: bool = False, allow_schema_change: bool = False) -> None
         import snowflake.connector
         from botocore.config import Config
 
+        credentials = _require_snowflake_credentials()
+
         # Spec section 6: 3 attempts with exponential backoff on transient S3
         # errors. botocore's standard retry mode implements exactly that, so
         # configure it rather than hand-rolling a loop around upload_file.
         s3_config = Config(retries={"max_attempts": 3, "mode": "standard"})
 
+        # autocommit=True is passed explicitly (it is Snowflake's session
+        # default) so the semantics at this call site are honest: DDL
+        # (TRUNCATE, CREATE) commits implicitly regardless of session mode,
+        # so there was never a transaction here for a trailing commit() to
+        # close. The load is NOT atomic across kinds — if certificates load
+        # and recommendations then fail, or reconcile() fails after both,
+        # raw is left partially refreshed with no rollback available.
+        # Recovery is to fix the cause and re-run: safe, because load_kind's
+        # TRUNCATE + COPY makes each kind's load a full refresh.
         connection = snowflake.connector.connect(
-            account=os.environ["SNOWFLAKE_ACCOUNT"],
-            user=os.environ["SNOWFLAKE_USER"],
-            password=os.environ["SNOWFLAKE_PASSWORD"],
+            **credentials,
             warehouse="epc_wh",
             database="epc",
             schema="raw",
             role="epc_dbt_role",
+            autocommit=True,
         )
+        cursor = connection.cursor()
         try:
             result = run_ingest(
                 boto3.client("s3", config=s3_config),
-                connection.cursor(),
+                cursor,
                 settings.s3_bucket,
                 sources,
                 allow_schema_change=allow_schema_change,
             )
-            connection.commit()
         finally:
+            cursor.close()
             connection.close()
 
     setup_logger().info("Ingest result: %s", result)

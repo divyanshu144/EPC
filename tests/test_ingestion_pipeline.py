@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+import config
 from ew_housing_energy_impact.ingestion import pipeline
 from ew_housing_energy_impact.ingestion.epc_source import ExtractedSource
+
+
+def _one_code_per_analysis_authority() -> dict[str, str]:
+    """One real GSS code per analysis authority, derived from config's SSOT map.
+
+    Deriving from CODE_TO_ANALYSIS_AUTHORITY (rather than hardcoding 14 codes)
+    means this test cannot silently drift from the mapping it is meant to guard.
+    """
+    codes: dict[str, str] = {}
+    for code, authority in config.CODE_TO_ANALYSIS_AUTHORITY.items():
+        codes.setdefault(authority, code)
+    return codes
 
 
 def _sources(tmp_path):
@@ -61,9 +76,24 @@ def test_authority_coverage_fails_when_authorities_missing():
         pipeline.assert_authority_coverage(cursor)
 
 
-def test_authority_coverage_passes_with_all_fourteen(monkeypatch):
-    monkeypatch.setattr(pipeline, "_missing_analysis_authorities", lambda codes: [])
-    assert pipeline.assert_authority_coverage(StageCursor([("E06000023",)])) == 1
+def test_authority_coverage_passes_with_all_fourteen():
+    """A complete 14-authority load passes — the case that actually matters."""
+    codes = _one_code_per_analysis_authority()
+    assert len(codes) == 14
+    cursor = StageCursor([(code,) for code in codes.values()])
+    assert pipeline.assert_authority_coverage(cursor) == 14
+
+
+def test_authority_coverage_fails_when_one_authority_dropped():
+    """Dropping exactly one of the fourteen authorities is caught, and named."""
+    codes = _one_code_per_analysis_authority()
+    dropped_authority, _dropped_code = next(iter(codes.items()))
+    remaining_rows = [
+        (code,) for authority, code in codes.items() if authority != dropped_authority
+    ]
+    cursor = StageCursor(remaining_rows)
+    with pytest.raises(ValueError, match=re.escape(dropped_authority)):
+        pipeline.assert_authority_coverage(cursor)
 
 
 def test_run_ingest_raises_on_reconciliation_mismatch(tmp_path, monkeypatch):

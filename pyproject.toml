@@ -32,6 +32,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "mlflow>=2.18",
     "boto3>=1.35",
+    "snowflake-connector-python>=3.12",
 ]
 
 [project.scripts]
