@@ -1,0 +1,29 @@
+-- Warehouse, database, schemas and role. Safe to re-run.
+USE ROLE ACCOUNTADMIN;
+
+CREATE WAREHOUSE IF NOT EXISTS epc_wh
+  WAREHOUSE_SIZE = XSMALL
+  AUTO_SUSPEND = 60
+  AUTO_RESUME = TRUE;
+
+CREATE DATABASE IF NOT EXISTS epc;
+
+CREATE SCHEMA IF NOT EXISTS epc.raw;
+CREATE SCHEMA IF NOT EXISTS epc.staging;
+CREATE SCHEMA IF NOT EXISTS epc.marts;
+CREATE SCHEMA IF NOT EXISTS epc.snapshots;
+CREATE SCHEMA IF NOT EXISTS epc.ai;
+
+CREATE ROLE IF NOT EXISTS epc_dbt_role;
+
+GRANT USAGE, OPERATE ON WAREHOUSE epc_wh TO ROLE epc_dbt_role;
+GRANT USAGE ON DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON ALL SCHEMAS IN DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON FUTURE SCHEMAS IN DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON ALL TABLES IN DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON FUTURE TABLES IN DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON ALL VIEWS IN DATABASE epc TO ROLE epc_dbt_role;
+GRANT ALL ON FUTURE VIEWS IN DATABASE epc TO ROLE epc_dbt_role;
+
+-- Replace with the Snowflake login the loader and dbt will use.
+GRANT ROLE epc_dbt_role TO USER IDENTIFIER('<your_snowflake_user>');
