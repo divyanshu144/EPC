@@ -60,3 +60,47 @@ So the entire documented entry point was dead while every quality gate stayed gr
 against `git log -1` before trusting the graph for impact analysis. A stale graph does not
 error — it silently returns an answer that omits whole subsystems, which is worse than a
 failed query. Rebuild, or fall back to Grep, when the commit doesn't match.
+
+---
+
+## 2026-08-11 — `ewhei download` failed with a JSON decode error; the EPC API had moved
+
+**What broke.** `ewhei download` failed:
+
+```
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+```
+
+**Root cause.** Not our code. `epc.opendatacommunities.org` now 301-redirects to
+`get-energy-performance-data.communities.gov.uk`, the site root of a rebuilt GOV.UK service.
+`requests` follows the redirect, lands on an HTML landing page, and gets back HTTP 200 — so
+`resp.raise_for_status()` passes cleanly, and `.json()` only fails afterwards, at char 0,
+because the body was never JSON to begin with. `raise_for_status()` proved the request
+didn't error; it proved nothing about what came back.
+
+**Three consequences, all of which reshaped the ingestion design:**
+
+1. **Auth changed.** `Basic base64(email:api_key)` is replaced by `Bearer <token>`, minted
+   from the account page on the new service — no programmatic way to obtain it.
+   `EPC_EMAIL`/`EPC_API_KEY` are obsolete.
+2. **Granularity changed.** There are no more per-local-authority archives. The bulk
+   endpoint `GET /api/files/domestic/csv` serves one national archive (~2.92 GB), split by
+   period, regenerated monthly — not one file per LA. S3 keys therefore became
+   period-keyed (`raw/certificates/<period>/certificates.csv`) instead of LA-keyed, and
+   South West filtering moved downstream into dbt staging, since there is no longer a
+   per-LA file to filter at ingestion.
+3. **Redirect behaviour is correct, not a bug.** `requests` strips the `Authorization`
+   header across this cross-host redirect. That is the right behaviour here: the 302 leads
+   to a presigned S3 URL that carries its own credentials in the query string, and forwarding
+   a bearer token to S3 would be both wrong and a credential leak.
+
+**What to do next time.**
+- A passing `raise_for_status()` does not prove you got JSON back. Check `Content-Type`
+  (or just try the parse and expect it might not be JSON) before trusting a 200.
+- Treat a cross-host redirect as a signal that the endpoint moved, not something to follow
+  blindly and paper over. It was the first real evidence something upstream had changed.
+- `scripts/pipeline/epc_download_merge_fast.py`'s `list_available_files` and
+  `pick_year_from_name` still hardcode the dead `epc.opendatacommunities.org` host, and
+  `download_one_file` (defined in `ew_housing_energy_impact.ingestion.epc_source`,
+  re-exported there) does too. Nothing in Phase A exercises `ewhei download` end to end, so
+  this is a live trap for the next person who runs it expecting it to work.

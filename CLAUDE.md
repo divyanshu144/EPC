@@ -25,11 +25,16 @@ pip install -e .          # installs the ewhei CLI
 
 Create a `.env` file in the project root:
 ```
-EPC_EMAIL=your@email.com
-EPC_API_KEY=your_key_here
+EPC_BEARER_TOKEN=your_token_here
 ```
 
-Credentials are obtained from https://epc.opendatacommunities.org (free registration).
+`EPC_EMAIL`/`EPC_API_KEY` are **obsolete** — the EPC service moved to GOV.UK in 2025 and auth
+changed from Basic to Bearer. Obtain the token from the account page on
+`get-energy-performance-data.communities.gov.uk` (free registration); there is no
+programmatic way to mint one. See `tasks/lessons.md` (2026-08-11 entry) for why this changed.
+
+For the warehouse ingestion path (`ewhei ingest`), also see `docs/ingestion.md` for
+`EPC_S3_BUCKET` and the Snowflake env vars.
 
 ---
 
@@ -42,7 +47,7 @@ ewhei run-all
 
 ### Step by step (recommended during development)
 ```bash
-ewhei download          # LA mode: ~200 MB (14 SW zips). Use --mode year for full ~6.7 GB national
+ewhei download          # One national archive per period (~2.92 GB compressed) — see Download modes
 ewhei clean             # Filter to SW LAs, standardise fields, derive YEAR
 ewhei features          # Impute, add LOG_FLOOR_AREA, POLICY_PERIOD, NEW_BUILD_SHARE
 ewhei eda               # EDA figures and tables -> reports/
@@ -63,7 +68,15 @@ ewhei db-init                 # Create analytical tables (SQLite default)
 ewhei db-load --dry-run       # Print planned table loads
 ewhei mlflow-info             # Show MLflow config and whether tracking is enabled
 ewhei train --track           # Force-enable MLflow for one training run
+ewhei ingest --dry-run        # Planned S3 keys and expected row counts, no network calls
+ewhei ingest                  # Upload extracted EPC sources to S3, load Snowflake raw, reconcile
 ```
+
+`ewhei ingest` is the S3 -> Snowflake warehouse ingestion path (Phase A of the warehouse
+migration — see `docs/ingestion.md`). It reads whatever `ewhei download` + `ewhei clean`
+already extracted under `RAW_EXTRACT_DIR`; it does not download anything itself. Needs
+`EPC_S3_BUCKET` and `SNOWFLAKE_ACCOUNT`/`SNOWFLAKE_USER`/`SNOWFLAKE_PASSWORD` for the
+non-dry-run path.
 
 All `orchestrate` steps can be skipped individually: `--skip-download`, `--skip-eda`,
 `--skip-policy`, `--skip-training`, `--skip-quality`, `--skip-monitoring`.
@@ -108,7 +121,7 @@ config.py                              # All shared paths and lookup maps
 scripts/pipeline/
   schemas.py                           # CORE_COLS, CORE_DTYPES, CLEAN_KEEP_COLS
   policy.py                            # policy_period(), POLICY_ORDER, _BOUNDARIES
-  epc_download_merge_fast.py           # Download (LA mode default) + merge
+  epc_download_merge_fast.py           # National-archive download + merge (LA mode retired — see Download modes)
   clean_epc.py                         # SW filter, standardise, derive YEAR
   build_features.py                    # Impute, LOG_FLOOR_AREA, NEW_BUILD_SHARE, POLICY_PERIOD
   report_eda.py                        # EDA figures and summary tables
@@ -123,6 +136,11 @@ src/ew_housing_energy_impact/
   registry.py                          # Artifact registry (JSONL append)
   logging_utils.py                     # Structured logger setup
   paths.py                             # repo_root() helper
+  ingestion/
+    epc_source.py                      # Bearer auth, zip download/validate/extract, period parsing
+    s3_upload.py                       # Period-keyed S3 uploads, skip-unchanged by stored MD5
+    load.py                            # Raw DDL, COPY INTO, quote-aware row counts, header diff, reconcile
+    pipeline.py                        # run_ingest() — wires source enumeration, upload, load, reconciliation, authority coverage
   orchestration/
     flows.py                           # epc_pipeline_flow() — Prefect flow
     tasks.py                           # 11 @task wrappers around pipeline steps
@@ -140,6 +158,11 @@ src/ew_housing_energy_impact/
 api.py                                 # FastAPI, 11 routes, DB-with-CSV fallback
 app.py                                 # Streamlit dashboard
 dags/etl_epc_pipeline.py               # Tombstone — Airflow is NOT implemented, Prefect is
+snowflake/                             # One-time Snowflake + IAM setup SQL, run in numeric order
+  01_setup.sql                         # Warehouse, database, schemas, role
+  02_storage_integration.sql           # Storage integration; DESCRIBE output feeds the IAM trust policy
+  03_stage_and_format.sql              # External stage + CSV file format
+  README.md                            # Order of operations, IAM policy/trust JSON, why the trust is bidirectional
 ```
 
 ### Optional subsystems
@@ -196,7 +219,7 @@ Split is by `BUILDING_REFERENCE_NUMBER` (property level), not by row. This preve
 
 ```bash
 make ci                 # lint + format-check + test — the full gate, mirrors GitHub Actions
-python -m pytest -q     # 68 tests
+python -m pytest -q     # 121 tests
 ```
 
 | File | Covers |
@@ -209,6 +232,15 @@ python -m pytest -q     # 68 tests
 | `test_mlflow_tracking.py` | `*_safe` tracking helpers no-op when disabled |
 | `test_monitoring.py` | Drift metrics, report rendering, retraining recommendation |
 | `test_orchestration.py` | Prefect task/flow wiring and dry-run planning |
+| `test_epc_source.py` | Bearer auth header, zip validation, cache reuse, period parsing, retry — mocked HTTP |
+| `test_s3_upload.py` | Period-keyed S3 key construction, skip-unchanged by stored MD5, retry — fake boto3 client |
+| `test_load.py` | Raw DDL generation, `COPY INTO` generation, quote-aware row counting, header-diff detection, reconciliation — fake cursor |
+| `test_ingestion_pipeline.py` | `run_ingest()` wiring, stage preflight, post-load authority coverage — fake clients |
+| `test_cli.py` | `_require_snowflake_credentials()` — named errors on missing env vars |
+
+All ingestion tests are offline (mocked HTTP, fake boto3/cursor). They prove the logic is
+internally consistent; they do not prove a real Snowflake account or S3 bucket behaves as
+assumed. See `docs/ingestion.md`.
 
 `tests/conftest.py` puts the repo root and `src/` on `sys.path`, so tests pass even when
 the editable install is broken. Do not rely on a green test run as proof that `ewhei`
@@ -220,12 +252,21 @@ Run the suite before and after any change to `policy.py` or `validation.py`.
 
 ## Download modes
 
-| Mode | Data | Size | When to use |
-|---|---|---|---|
-| `--mode la` (default) | 14 SW LA zips only | ~200 MB | Development, disk-constrained |
-| `--mode year` | 18 annual national bulk zips | ~6.7 GB compressed / ~50 GB unzipped | Full national replication |
+**Obsolete as of 2026-08-11.** The EPC service moved to GOV.UK
+(`epc.opendatacommunities.org` now 301-redirects to
+`get-energy-performance-data.communities.gov.uk`) and no longer serves per-local-authority
+zips. `--mode la` / `--mode year` are gone — the bulk endpoint
+(`GET /api/files/domestic/csv`) serves **one national archive, split by period**
+(~2.92 GB compressed, regenerated monthly), not one archive per LA and not one per year
+selectable independently. `main(mode=...)` in `epc_download_merge_fast.py` still accepts a
+`mode` argument for backward compatibility with existing callers, but it no longer changes
+behaviour. Auth is `Bearer <EPC_BEARER_TOKEN>`, not `Basic base64(email:api_key)` — see
+`tasks/lessons.md` (2026-08-11 entry) for the full story and `docs/ingestion.md` for how the
+downloaded archives move on into S3 and Snowflake via `ewhei ingest`.
 
-The disk on this machine has limited free space (~26 GB available at project start). Always use LA mode unless the full national dataset is explicitly needed.
+South West filtering that used to happen at download time (picking 14 LA files) now happens
+downstream, in `clean_epc.py` for the pandas pipeline and, going forward, in dbt staging for
+the warehouse path (Phase B, not yet built).
 
 ---
 
@@ -268,7 +309,8 @@ Services defined in `docker-compose.yml` (service name → container → host po
 
 ## Common Gotchas
 - Never redefine `ARTIFACTS_DIR` or `REGISTRY_PATH` inline — always import from `config.py`
-- Never use `--mode year` unless explicitly asked — disk is limited (~26 GB)
+- `--mode la` / `--mode year` no longer exist — the EPC API serves one national archive per
+  period now. See Download modes.
 - Always run `pytest` before and after changes to `policy.py` or `validation.py`
 - Never move 2015 into ECO2 period — boundary is deliberate
 - **A green `pytest` does not prove `ewhei` works.** `conftest.py` patches `sys.path`, so the
@@ -347,7 +389,7 @@ diverge, the working tree is authoritative.**
 
 A task is not complete until all of the following hold:
 
-1. `make ci` passes — lint, format-check, and tests (currently **68 passing**).
+1. `make ci` passes — lint, format-check, and tests (currently **121 passing**).
 2. `make smoke` passes if the CLI surface changed.
 3. New logic has tests.
 4. `HANDOFF.md` reflects the current state.
