@@ -55,11 +55,6 @@ def _stored_md5(client, bucket: str, key: str) -> str | None:
     return head.get("Metadata", {}).get(_MD5_METADATA_KEY)
 
 
-def needs_upload(client, bucket: str, key: str, path: Path) -> bool:
-    """True when the object is absent or its stored hash differs from the file."""
-    return _stored_md5(client, bucket, key) != local_md5(path)
-
-
 def upload_source(client, bucket: str, source: ExtractedSource) -> bool:
     """Upload one source unless S3 already holds identical content.
 

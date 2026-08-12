@@ -46,6 +46,26 @@ def test_generate_raw_ddl_rejects_empty_columns():
         load.generate_raw_ddl("epc.raw.certificates", [])
 
 
+def test_generate_raw_ddl_rejects_embedded_double_quote():
+    """A quote in a header value must not break out of the quoted identifier."""
+    with pytest.raises(ValueError, match="position 1"):
+        load.generate_raw_ddl("epc.raw.certificates", ["LMK_KEY", 'BAD"COL'])
+
+
+def test_generate_raw_ddl_rejects_semicolon():
+    """A semicolon in a header value must not be interpolated into DDL unescaped."""
+    with pytest.raises(ValueError, match="position 0"):
+        load.generate_raw_ddl("epc.raw.certificates", ["BAD;DROP TABLE X"])
+
+
+def test_generate_raw_ddl_accepts_normal_epc_style_names():
+    ddl = load.generate_raw_ddl(
+        "epc.raw.certificates", ["LMK_KEY", "TOTAL_FLOOR_AREA", "CURRENT ENERGY RATING"]
+    )
+    assert '"LMK_KEY" STRING' in ddl
+    assert '"CURRENT ENERGY RATING" STRING' in ddl
+
+
 def test_copy_into_binds_by_name_and_aborts_on_error():
     sql = load.copy_into_sql("epc.raw.certificates", "certificates")
     assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in sql

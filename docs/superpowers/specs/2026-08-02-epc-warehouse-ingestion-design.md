@@ -233,8 +233,8 @@ Every new unit test injects its client and touches no network.
 
 | Test file | Covers |
 |---|---|
-| `tests/test_epc_source.py` | Bearer header construction, zip validation, cache reuse, period parsing, retry — mocked HTTP |
-| `tests/test_s3_upload.py` | Key construction per period, skip-unchanged by stored hash, retry — fake boto3 client |
+| `tests/test_epc_source.py` | Bearer header construction, zip validation, period parsing, extracted-source discovery, compat shim |
+| `tests/test_s3_upload.py` | Key construction per period, skip-unchanged by stored hash — fake boto3 client |
 | `tests/test_load.py` | DDL generation, `COPY INTO` generation, **quote-aware row counting**, header-diff detection, reconciliation — fake cursor |
 | `tests/test_ingestion_pipeline.py` | Wiring, stage preflight, post-load authority coverage |
 | `tests/test_geography.py` | **Imports updated only** — see below |

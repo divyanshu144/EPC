@@ -34,6 +34,15 @@ DOMESTIC_CSV_INFO_ENDPOINT = f"{API_BASE}/api/files/domestic/csv/info"
 TIMEOUT = 120
 MAX_WORKERS = 4
 
+_DOWNLOAD_PATH_NOT_MIGRATED = (
+    "{fn} still targets the retired epc.opendatacommunities.org host, which "
+    "301-redirects to an HTML landing page instead of serving JSON — the same "
+    "failure this redesign exists to fix. The EPC service moved to GOV.UK (see "
+    "spec section 0). Migrating this download path to the new API and bearer "
+    "auth is tracked as R8/R9 and not yet implemented. In the meantime, "
+    "`ewhei ingest` works on already-extracted local sources."
+)
+
 # 'domestic-2025-09' or 'domestic-2024', with or without a .zip suffix.
 _PERIOD_RE = re.compile(r"^domestic-(\d{4}(?:-\d{2})?)(?:\.zip)?$")
 
@@ -90,6 +99,8 @@ def download_one_file(args) -> str:
     looks like a complete cache. An existing cached zip is validated before
     skipping; if it is corrupt/partial it is removed and re-downloaded.
     """
+    raise NotImplementedError(_DOWNLOAD_PATH_NOT_MIGRATED.format(fn="download_one_file"))
+
     fname, headers = args
     url = f"https://epc.opendatacommunities.org/api/v1/files/{fname}"
     out_path = RAW_BULK_DIR / fname

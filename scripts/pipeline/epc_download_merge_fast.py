@@ -26,6 +26,7 @@ import requests
 
 from config import EPC_MERGED_CSV, RAW_EXTRACT_DIR
 from ew_housing_energy_impact.ingestion.epc_source import (  # noqa: F401
+    _DOWNLOAD_PATH_NOT_MIGRATED,
     _is_valid_zip,
     auth_headers,
     download_all,
@@ -52,6 +53,8 @@ DTYPES = CORE_DTYPES
 
 def list_available_files(headers: dict) -> dict:
     """Get list of all files available via EPC API."""
+    raise NotImplementedError(_DOWNLOAD_PATH_NOT_MIGRATED.format(fn="list_available_files"))
+
     resp = requests.get(
         "https://epc.opendatacommunities.org/api/v1/files",
         headers={**headers, "Accept": "application/json"},

@@ -100,10 +100,48 @@ def test_run_ingest_raises_on_reconciliation_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "upload_all", lambda *a, **k: {"uploaded": 2, "skipped": 0})
     monkeypatch.setattr(pipeline, "load_kind", lambda *a, **k: 99)
     monkeypatch.setattr(pipeline, "preflight_stage", lambda c: 2)
+    monkeypatch.setattr(pipeline, "assert_local_covers_stage", lambda c, s: None)
     monkeypatch.setattr(pipeline, "assert_authority_coverage", lambda c: 14)
 
     with pytest.raises(ValueError, match="reconciliation failed"):
         pipeline.run_ingest(object(), object(), "b", _sources(tmp_path))
+
+
+def test_assert_local_covers_stage_passes_when_local_covers_everything(tmp_path):
+    sources = _sources(tmp_path)  # period 2025-09 only
+    cursor = StageCursor(
+        [
+            ("s3://epc-sw-pipeline-dev/raw/certificates/2025-09/certificates.csv",),
+            ("s3://epc-sw-pipeline-dev/raw/recommendations/2025-09/recommendations.csv",),
+        ]
+    )
+    pipeline.assert_local_covers_stage(cursor, sources)  # does not raise
+
+
+def test_assert_local_covers_stage_raises_naming_the_missing_period(tmp_path):
+    """A period staged in a past run but pruned from local disk must be named,
+    not surfaced as a baffling row-count mismatch downstream in reconcile()."""
+    sources = _sources(tmp_path)  # period 2025-09 only
+    cursor = StageCursor(
+        [
+            ("s3://epc-sw-pipeline-dev/raw/certificates/2025-09/certificates.csv",),
+            ("s3://epc-sw-pipeline-dev/raw/certificates/2024-01/certificates.csv",),
+        ]
+    )
+    with pytest.raises(ValueError, match="2024-01"):
+        pipeline.assert_local_covers_stage(cursor, sources)
+
+
+def test_assert_local_covers_stage_skips_unparseable_row(tmp_path):
+    """A LIST row whose path doesn't fit the expected shape is skipped, not a crash."""
+    sources = _sources(tmp_path)
+    cursor = StageCursor(
+        [
+            ("s3://epc-sw-pipeline-dev/raw/certificates/2025-09/certificates.csv",),
+            ("s3://epc-sw-pipeline-dev/raw/_SUCCESS",),
+        ]
+    )
+    pipeline.assert_local_covers_stage(cursor, sources)  # does not raise
 
 
 def test_run_ingest_rejects_empty_source_list():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 DATABASE = "epc"
@@ -22,6 +23,26 @@ def read_header(path: Path) -> list[str]:
         return next(csv.reader(handle))
 
 
+_VALID_COLUMN_NAME = re.compile(r"^[A-Za-z0-9_ ]+$")
+
+
+def _validate_column_name(name: str, position: int) -> None:
+    """Reject anything outside a conservative allowlist before it reaches DDL.
+
+    Column names come from `read_header()` reading the first row of an
+    external CSV — they are untrusted input, not vetted identifiers. EPC
+    headers are UPPER_SNAKE_CASE, so letters, digits, underscore and space is
+    generous. Anything else (an embedded quote, a semicolon, ...) must not be
+    interpolated into DDL unescaped: a quote breaks the statement outright,
+    and worse is possible.
+    """
+    if not _VALID_COLUMN_NAME.match(name):
+        raise ValueError(
+            f"Invalid column name at position {position}: {name!r}. Column names "
+            "must contain only letters, digits, underscores and spaces."
+        )
+
+
 def generate_raw_ddl(table: str, columns: list[str]) -> str:
     """CREATE TABLE with every column typed STRING.
 
@@ -35,6 +56,8 @@ def generate_raw_ddl(table: str, columns: list[str]) -> str:
     """
     if not columns:
         raise ValueError(f"Cannot generate DDL for {table}: no columns found in header")
+    for position, name in enumerate(columns):
+        _validate_column_name(name, position)
     body = ",\n".join(f'  "{name}" STRING' for name in columns)
     return f"CREATE TABLE IF NOT EXISTS {table} (\n{body}\n)"
 

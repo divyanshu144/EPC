@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ew_housing_energy_impact.ingestion.epc_source import (
     SOURCE_KINDS,
     ExtractedSource,
@@ -42,6 +44,63 @@ def preflight_stage(cursor) -> int:
     if not rows:
         raise ValueError(f"Stage is empty or unreadable: @{STAGE}")
     return len(rows)
+
+
+_PERIOD_SEGMENT_RE = re.compile(r"^\d{4}(?:-\d{2})?$")
+
+
+def _period_from_stage_path(path: str) -> str | None:
+    """Extract the period segment from one staged object's path.
+
+    Stage paths look like 's3://bucket/raw/certificates/2025-09/certificates.csv'
+    — the period is the directory immediately above the filename. Returns None
+    for anything that does not fit that shape: a row this cannot confidently
+    parse should be skipped, not crash the run.
+    """
+    parts = path.rstrip("/").split("/")
+    if len(parts) < 2:
+        return None
+    candidate = parts[-2]
+    return candidate if _PERIOD_SEGMENT_RE.match(candidate) else None
+
+
+def assert_local_covers_stage(cursor, sources: list[ExtractedSource]) -> None:
+    """Fail if the stage holds a period that local sources do not cover.
+
+    `load_kind`'s COPY INTO has no period filter: it loads every period file
+    ever uploaded to the stage's S3 prefix, across all past runs — S3 keys are
+    stable and nothing deletes them, by design (spec D8). `reconcile()` then
+    compares that cumulative warehouse count against `expected_rows`, which
+    sums local row counts over only the sources passed into *this* run.
+
+    `iter_extracted_sources` documents that local extracts get pruned to
+    reclaim disk. Once that happens, the stage holds more periods than local
+    disk does, and `reconcile()` raises a baffling count mismatch for a load
+    that is actually correct. Catch that divergence here, with an explanation,
+    before it ever reaches `reconcile()` — reconciliation is only meaningful
+    when local sources mirror what is staged.
+    """
+    rows = cursor.execute(f"LIST @{STAGE}").fetchall()
+    staged_periods: set[str] = set()
+    for row in rows:
+        if not row:
+            continue
+        period = _period_from_stage_path(str(row[0]))
+        if period is not None:
+            staged_periods.add(period)
+
+    local_periods = {source.period for source in sources}
+    missing = sorted(staged_periods - local_periods)
+    if missing:
+        raise ValueError(
+            f"Stage holds periods not present in local sources: {missing}. "
+            "Reconciliation compares local row counts against a cumulative "
+            "warehouse load — COPY INTO has no period filter, so every period "
+            "ever uploaded to the stage is loaded every run (spec D8). Every "
+            "staged period must therefore also be present locally for that "
+            "comparison to be valid. Re-extract the missing period(s) locally "
+            "before running ingest again."
+        )
 
 
 def loaded_authority_codes(cursor) -> set[str]:
@@ -91,6 +150,7 @@ def run_ingest(
     # file whose stored content-md5 already matches.
     upload_result = upload_all(s3_client, bucket, sources)
     staged_files = preflight_stage(cursor)
+    assert_local_covers_stage(cursor, sources)
 
     actual: dict[str, int] = {}
     for kind in plan["kinds"]:

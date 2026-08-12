@@ -232,8 +232,8 @@ python -m pytest -q     # 121 tests
 | `test_mlflow_tracking.py` | `*_safe` tracking helpers no-op when disabled |
 | `test_monitoring.py` | Drift metrics, report rendering, retraining recommendation |
 | `test_orchestration.py` | Prefect task/flow wiring and dry-run planning |
-| `test_epc_source.py` | Bearer auth header, zip validation, cache reuse, period parsing, retry — mocked HTTP |
-| `test_s3_upload.py` | Period-keyed S3 key construction, skip-unchanged by stored MD5, retry — fake boto3 client |
+| `test_epc_source.py` | Bearer auth header, zip validation, period parsing, extracted-source discovery, compat shim |
+| `test_s3_upload.py` | Period-keyed S3 key construction, skip-unchanged by stored MD5 — fake boto3 client |
 | `test_load.py` | Raw DDL generation, `COPY INTO` generation, quote-aware row counting, header-diff detection, reconciliation — fake cursor |
 | `test_ingestion_pipeline.py` | `run_ingest()` wiring, stage preflight, post-load authority coverage — fake clients |
 | `test_cli.py` | `_require_snowflake_credentials()` — named errors on missing env vars |
