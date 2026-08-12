@@ -1,4 +1,8 @@
 -- Single quotes only: Snowflake rejects double-quoted literals here.
+--
+-- ${AWS_ACCOUNT_ID} is a placeholder, not valid Snowflake syntax. Render this
+-- file with `make snowflake-sql` and paste the output into the console. The
+-- account id is kept out of version control because this repository is public.
 USE ROLE ACCOUNTADMIN;
 
 CREATE OR REPLACE STORAGE INTEGRATION epc_s3_int

@@ -178,7 +178,7 @@ invented by us.
 | File format | `epc.raw.csv_format` | `PARSE_HEADER=TRUE` (**not** `SKIP_HEADER` — mutually exclusive), `FIELD_OPTIONALLY_ENCLOSED_BY='"'`, minimal `NULL_IF` per D10. Loaded with `MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE` per D15 |
 
 **Region:** Snowflake must be created on AWS in `eu-west-2` (London) to match the S3 bucket
-and avoid cross-region egress. The existing AWS account is `${AWS_ACCOUNT_ID}`, region
+and avoid cross-region egress. The AWS account id is supplied via the `AWS_ACCOUNT_ID` environment variable and deliberately kept out of version control (public repo); region is
 `eu-west-2`.
 
 **Bucket name:** `epc-sw-pipeline-dev`, in `eu-west-2`. S3 bucket names are globally unique,

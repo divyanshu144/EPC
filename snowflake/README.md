@@ -34,7 +34,18 @@ list is not worth hand-maintaining.
    ```
    Role `epc-snowflake-s3-role` with that policy attached, any placeholder trust
    policy for now.
-3. **`02_storage_integration.sql`**, then read the `DESCRIBE` output.
+3. **`02_storage_integration.sql`** — this file does NOT contain the AWS account id.
+
+   It carries a `${AWS_ACCOUNT_ID}` placeholder, which is not valid Snowflake syntax.
+   This repository is public, so the account id is supplied from the environment
+   rather than committed. Render the runnable SQL and paste that into the console:
+
+   ```bash
+   export AWS_ACCOUNT_ID=<your 12-digit account id>
+   make snowflake-sql
+   ```
+
+   Then run the rendered statements, then read the `DESCRIBE` output.
 4. **AWS: replace the role's trust policy** with the two values from `DESCRIBE`:
    ```json
    {
