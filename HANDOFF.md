@@ -14,11 +14,16 @@ context ~70% · 30+ min since last update.
 against real AWS/Snowflake/EPC services — that is the next action for whoever has the
 credentials.**
 
-- **Branch:** merged into `main` at `aaf0843` and the feature branch deleted.
-  **`main` is 20 commits ahead of `origin/main` — nothing has been pushed.**
+- **Branch:** merged into `main` at `2b71b69` and the feature branch deleted.
+  **History was rewritten on 2026-08-12** to purge a real AWS account id from the
+  Snowflake DDL, spec and plan. Only the unpublished range was rewritten, so the
+  published commit `ac98e2e` is untouched and `origin/main` remains an ancestor —
+  a normal push works, no force push. Any commit SHA recorded before that date and
+  after `ac98e2e` is stale; match by commit subject instead.
+  Pre-rewrite state is kept on the tag `backup/pre-purge-20260812-090954`.
+  **`main` is 22 commits ahead of `origin/main` — nothing has been pushed.**
   Merged as a merge commit, not fast-forwarded: `main` had gained `ac98e2e` (adds
-  `video.md`) while the work was in progress, and rebasing would have rewritten the 19
-  commit SHAs that this file and the progress ledger reference by hash.
+  `video.md`) while the work was in progress.
 - **Spec:** `docs/superpowers/specs/2026-08-02-epc-warehouse-ingestion-design.md` — approved,
   amended 2026-08-11 (see spec §0) after the EPC API moved to GOV.UK mid-implementation.
 - **Docs:** `docs/ingestion.md` — what it does, how to run it, S3 layout, the design rationale
@@ -56,7 +61,7 @@ this plainly to whoever picks this up next — do not let "129 passing" read as 
 end to end."
 
 A final whole-branch review ran after all seven tasks and returned **merge-ready with
-follow-ups, no blocking issues**. Its five findings were fixed in one wave (`ee0e3cc`) and
+follow-ups, no blocking issues**. Its five findings were fixed in one wave (`1e9c915`) and
 all five verdicted addressed by a scoped re-review. The most consequential was one no
 per-task review could have seen: **reconciliation compared local disk against a cumulative
 warehouse.** `COPY INTO` loads every period ever staged, while `expected_rows` counted only
