@@ -14,7 +14,11 @@ context ~70% · 30+ min since last update.
 against real AWS/Snowflake/EPC services — that is the next action for whoever has the
 credentials.**
 
-- **Branch:** `feat/warehouse-ingestion`, not pushed, not merged.
+- **Branch:** merged into `main` at `aaf0843` and the feature branch deleted.
+  **`main` is 20 commits ahead of `origin/main` — nothing has been pushed.**
+  Merged as a merge commit, not fast-forwarded: `main` had gained `ac98e2e` (adds
+  `video.md`) while the work was in progress, and rebasing would have rewritten the 19
+  commit SHAs that this file and the progress ledger reference by hash.
 - **Spec:** `docs/superpowers/specs/2026-08-02-epc-warehouse-ingestion-design.md` — approved,
   amended 2026-08-11 (see spec §0) after the EPC API moved to GOV.UK mid-implementation.
 - **Docs:** `docs/ingestion.md` — what it does, how to run it, S3 layout, the design rationale
