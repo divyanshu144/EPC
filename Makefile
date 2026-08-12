@@ -49,3 +49,4 @@ smoke:
 	PYTHONPATH=src:. python -m ew_housing_energy_impact orchestrate --dry-run
 	PYTHONPATH=src:. python -m ew_housing_energy_impact monitor --dry-run
 	PYTHONPATH=src:. python -m ew_housing_energy_impact db-load --dry-run
+	PYTHONPATH=src:. python -m ew_housing_energy_impact ingest --dry-run
