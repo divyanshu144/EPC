@@ -31,12 +31,12 @@ Branch: `feat/warehouse-ingestion`
 - [x] Task 4: Snowflake DDL and runbook (`snowflake/01`–`03`, `README.md`)
 - [x] Task 5: raw DDL, header diff, quote-aware reconciliation
 - [x] Task 6: wire behind `ewhei ingest`, review-fix round (deps, credential errors,
-  atomicity comment, authority-coverage test rewrite) — 121 tests passing
+  atomicity comment, authority-coverage test rewrite) — 129 tests passing
 - [x] Task 7: documentation and handoff (this task — `docs/ingestion.md`, `CLAUDE.md`,
   `HANDOFF.md`, `tasks/todo.md`, `tasks/lessons.md`)
 - [ ] **Manual verification against real services — not done, needs a human with
   credentials.** See `.superpowers/sdd/2026-08-11-epc-warehouse-ingestion/task-7-brief.md`
-  and `docs/ingestion.md`'s "What is and is not verified" note. All 121 tests are offline.
+  and `docs/ingestion.md`'s "What is and is not verified" note. All 129 tests are offline.
 - [ ] Phase B (dbt staging + marts) — needs its own spec before implementation
 - [ ] Phase C (Airflow cutover, Prefect retirement) — needs its own spec first
 - [ ] Phase D (AI lane) — needs its own spec first; depends on Phase B landing

@@ -40,7 +40,7 @@ that reshaped several of those decisions.
 ### What "complete" does and does not mean here
 
 Phase A code is complete and has been through a review-and-fix round (see
-`.superpowers/sdd/2026-08-11-epc-warehouse-ingestion/task-6-report.md`). All 121 tests pass
+`.superpowers/sdd/2026-08-11-epc-warehouse-ingestion/task-6-report.md`). All 129 tests pass
 offline — mocked HTTP, fake boto3 client, fake Snowflake cursor. **None of it has been run
 against a real AWS account, a real Snowflake account, or a real bearer token.** Offline tests
 prove the logic is internally consistent: `preflight_stage` raises on an empty stage,
@@ -48,8 +48,30 @@ prove the logic is internally consistent: `preflight_stage` raises on an empty s
 authority. They do not prove `MATCH_BY_COLUMN_NAME` behaves as assumed against a real
 Snowflake table, that the storage integration's IAM trust actually authenticates, or that
 reconciliation matches on a real 2.92 GB EPC file rather than a small hand-built fixture. Say
-this plainly to whoever picks this up next — do not let "121 passing" read as "verified
+this plainly to whoever picks this up next — do not let "129 passing" read as "verified
 end to end."
+
+A final whole-branch review ran after all seven tasks and returned **merge-ready with
+follow-ups, no blocking issues**. Its five findings were fixed in one wave (`ee0e3cc`) and
+all five verdicted addressed by a scoped re-review. The most consequential was one no
+per-task review could have seen: **reconciliation compared local disk against a cumulative
+warehouse.** `COPY INTO` loads every period ever staged, while `expected_rows` counted only
+periods present locally — so once local extracts are pruned to reclaim disk (which this
+project's own code documents as normal), `reconcile()` would fail forever on correct loads.
+`assert_local_covers_stage` now detects that divergence and names the missing periods.
+
+**Two follow-ups to clear before the R8/R9 backfill, not before merge:**
+
+1. **The download path is guarded, not fixed.** `download_one_file` and
+   `list_available_files` now raise `NotImplementedError` explaining the host is retired,
+   instead of dying with a `JSONDecodeError` three frames deep. Migrating them to the GOV.UK
+   endpoints needs the bearer token and live testing.
+2. **The local-vs-stage scope mismatch fails loudly now, but is not resolved.** An operator
+   whose local extracts no longer mirror S3 has to decide whether to re-extract or prune the
+   stage. That decision is not automated.
+
+**Parked, cosmetic:** `tests/test_s3_upload.py:17` has a docstring referring to
+`needs_upload()`, which the final fix wave deleted. No behaviour depends on it.
 
 ### Earlier state (still true)
 
@@ -137,7 +159,7 @@ documentation only, no production code.
 4. **Pre-existing dependency conflicts** — `fastmcp` wants `websockets>=15.0.1` (have 13.1),
    `typer-slim` wants `typer>=0.23.1` (have 0.17.5). Unrelated to this project and harmless
    to the suite, but they surface on every `pip install`.
-5. **Phase A has never run against real services.** Every one of the 121 tests is offline.
+5. **Phase A has never run against real services.** Every one of the 129 tests is offline.
    None of it proves `MATCH_BY_COLUMN_NAME` behaves as assumed, that the storage integration
    authenticates, or that reconciliation matches on real EPC files. See "What 'complete'
    does and does not mean here" above and `docs/ingestion.md`.
@@ -151,13 +173,13 @@ Last run 2026-08-11, end of Task 6's review-fix round — all green:
 ```
 ruff check .            -> All checks passed!
 ruff format --check .   -> 61 files already formatted
-python -m pytest        -> 121 passed, 948 warnings in 4.04s
+python -m pytest        -> 129 passed, 948 warnings in 4.90s
 make smoke              -> ewhei --help + 4 dry-run paths OK (added: ingest --dry-run)
 ```
 
 Reproduce with `make ci` then `make smoke`. The 948 warnings are pre-existing deprecation
 noise from `shap`, `pydantic.v1`, and `prefect` — not regressions. Test count grew from 68
-(2026-08-02 baseline) to 121 across Tasks 1–6: `test_epc_source.py`, `test_s3_upload.py`,
+(2026-08-02 baseline) to 129 across Tasks 1–7 plus the final fix wave: `test_epc_source.py`, `test_s3_upload.py`,
 `test_load.py`, `test_ingestion_pipeline.py`, `test_cli.py` are new; all offline.
 
 **Note:** a green `pytest` does not prove the CLI works — `tests/conftest.py` patches

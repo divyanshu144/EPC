@@ -219,7 +219,7 @@ Split is by `BUILDING_REFERENCE_NUMBER` (property level), not by row. This preve
 
 ```bash
 make ci                 # lint + format-check + test — the full gate, mirrors GitHub Actions
-python -m pytest -q     # 121 tests
+python -m pytest -q     # 129 tests
 ```
 
 | File | Covers |
@@ -394,7 +394,7 @@ diverge, the working tree is authoritative.**
 
 A task is not complete until all of the following hold:
 
-1. `make ci` passes — lint, format-check, and tests (currently **121 passing**).
+1. `make ci` passes — lint, format-check, and tests (currently **129 passing**).
 2. `make smoke` passes if the CLI surface changed.
 3. New logic has tests.
 4. `HANDOFF.md` reflects the current state.
