@@ -12,7 +12,21 @@ import pandas as pd
 import seaborn as sns
 
 from config import ROOT
+from scripts.pipeline.clean_epc import AGE_BANDS
 from scripts.pipeline.policy import POLICY_ORDER
+
+
+def _short_label(label: str) -> str:
+    """'England and Wales: 1900-1929' -> '1900-1929'; before/onwards get shorthand."""
+    tail = label.split(":", 1)[1].strip() if ":" in label else label
+    if tail.startswith("before"):
+        return "Pre-" + tail.split()[-1]
+    if tail.endswith("onwards"):
+        return tail.split()[0] + "+"
+    return tail
+
+
+_BAND_TO_SHORT: dict[str, str] = {label: _short_label(label) for _, _, label in AGE_BANDS}
 
 DATA_PATH = (
     ROOT / "data" / "processed" / "ew_epc_core_clean_sw" / "ew_epc_core_clean_sw_imputed.csv"
@@ -32,32 +46,16 @@ def load_data() -> pd.DataFrame:
 
 
 def simplify_age_band(age: str) -> str:
-    s = str(age)
-    if "1900" in s or "pre" in s.lower():
-        return "Pre-1900"
-    if "1900-1929" in s:
-        return "1900-1929"
-    if "1930-1949" in s:
-        return "1930-1949"
-    if "1950-1966" in s:
-        return "1950-1966"
-    if "1967-1975" in s:
-        return "1967-1975"
-    if "1976-1982" in s:
-        return "1976-1982"
-    if "1983-1990" in s:
-        return "1983-1990"
-    if "1991-1995" in s:
-        return "1991-1995"
-    if "1996-2002" in s:
-        return "1996-2002"
-    if "2003-2006" in s:
-        return "2003-2006"
-    if "2007-2011" in s:
-        return "2007-2011"
-    if "2012" in s or "2012-2021" in s:
-        return "2012-2021"
-    return "Unknown"
+    """Group a canonical age band into a short label for plotting.
+
+    Derived from clean_epc.AGE_BANDS by exact lookup rather than substring
+    matching. The previous implementation tested ``"1900" in s`` before
+    ``"1900-1929"``, so every 1900-1929 row (9,737 on real South West data) was
+    relabelled "Pre-1900" and the 1900-1929 branch was unreachable. An exact
+    lookup cannot fail that way, and adding a band to AGE_BANDS now updates this
+    function automatically.
+    """
+    return _BAND_TO_SHORT.get(str(age).strip(), "Unknown")
 
 
 def save_fig(path: Path):

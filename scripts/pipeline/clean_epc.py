@@ -13,6 +13,7 @@ Clean EPC core CSV and filter to South West region.
     data/processed/ew_epc_core_clean_sw.csv
 """
 
+import re
 from collections import Counter
 
 import pandas as pd
@@ -39,13 +40,73 @@ DTYPES_LIGHT = CLEAN_DTYPES
 # ----------------------------
 
 
+# Canonical construction-age bands, ordered, with inclusive numeric bounds.
+# `None` for the lower bound means open-ended below, `None` for the upper bound
+# means open-ended above. This is the single source of truth for age-band
+# vocabulary; report_eda.simplify_age_band derives its grouping from it.
+AGE_BANDS: tuple[tuple[int | None, int | None, str], ...] = (
+    (None, 1899, "England and Wales: before 1900"),
+    (1900, 1929, "England and Wales: 1900-1929"),
+    (1930, 1949, "England and Wales: 1930-1949"),
+    (1950, 1966, "England and Wales: 1950-1966"),
+    (1967, 1975, "England and Wales: 1967-1975"),
+    (1976, 1982, "England and Wales: 1976-1982"),
+    (1983, 1990, "England and Wales: 1983-1990"),
+    (1991, 1995, "England and Wales: 1991-1995"),
+    (1996, 2002, "England and Wales: 1996-2002"),
+    (2003, 2006, "England and Wales: 2003-2006"),
+    (2007, 2011, "England and Wales: 2007-2011"),
+    (2012, 2021, "England and Wales: 2012-2021"),
+    (2022, None, "England and Wales: 2022 onwards"),
+)
+
+_BARE_YEAR = re.compile(r"^\d{4}$")
+
+
+def _band_for_year(year: int) -> str | None:
+    """Return the canonical band containing `year`, or None if no band covers it."""
+    for low, high, label in AGE_BANDS:
+        if (low is None or year >= low) and (high is None or year <= high):
+            return label
+    return None
+
+
 def norm_age_band(x: str) -> str:
-    """Normalise age band textual variants into consistent labels."""
+    """Normalise construction age into a canonical band label.
+
+    EPC records construction age two ways: as a band ("England and Wales:
+    1950-1966") and, for many newer certificates, as a bare year ("2023"). On
+    real South West data this produced 40 distinct levels, 27 of them bare years
+    covering 13,338 rows (10.7%).
+
+    That fragmentation is not cosmetic. Sparse single-year levels are what made
+    three test rows carry categories unseen in training, which combined with a
+    rank-deficient design matrix to produce a reported R2 of -1.13e15 (see
+    tests/test_preprocessor.py). Collapsing a bare year into its band removes the
+    sparse levels and makes the categorical dense.
+
+    The bulk of the bare years were 2022-2025 (12,367 rows), which had no band at
+    all because the published vocabulary stopped at "2012 onwards". AGE_BANDS
+    therefore adds an open-ended "2022 onwards" band rather than forcing those
+    rows into 2012-2021, which would be simply wrong.
+
+    Unrecognised text is returned unchanged rather than bucketed into Unknown: a
+    new label appearing in the source is information, and silently absorbing it
+    would hide a vocabulary change.
+    """
     if pd.isna(x):
         return "Unknown"
     s = str(x).strip()
+
+    # Historical "onwards" phrasing for bands that have since closed.
     s = s.replace("England and Wales: 2012 onwards", "England and Wales: 2012-2021")
     s = s.replace("England and Wales: 2007 onwards", "England and Wales: 2007-2011")
+
+    if _BARE_YEAR.match(s):
+        band = _band_for_year(int(s))
+        if band is not None:
+            return band
+
     return s
 
 
