@@ -7,6 +7,7 @@ rewriting business logic.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
@@ -22,7 +23,24 @@ from ew_housing_energy_impact.validation import validate_imputed_csv, write_vali
 
 try:  # pragma: no cover - exercised when Prefect is installed.
     from prefect import get_run_logger, task
-except ModuleNotFoundError:  # pragma: no cover - local test fallback before dependency install.
+
+    PREFECT_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - only when the install is broken.
+    # Prefect is a declared dependency, so reaching this branch means the
+    # environment is broken, not that orchestration is optional. Without a
+    # warning the pipeline ran as a plain sequential loop — no retries, no
+    # observability, no run history — and still reported success. Announce the
+    # downgrade rather than letting a for-loop masquerade as orchestration.
+    warnings.warn(
+        "Prefect is not installed, so pipeline tasks will run as plain sequential "
+        "function calls with no retries, no observability and no run history. "
+        "Prefect is a declared dependency — reinstall with `pip install -e .` "
+        "before treating an orchestrated run as trustworthy.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+    PREFECT_AVAILABLE = False
     get_run_logger = None
     F = TypeVar("F", bound=Callable[..., Any])
 

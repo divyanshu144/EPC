@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 from ew_housing_energy_impact.logging_utils import setup_logger
 from ew_housing_energy_impact.orchestration.tasks import (
     PIPELINE_TASK_NAMES,
+    PREFECT_AVAILABLE,
     build_features,
     clean_south_west,
     download_or_merge_epc,
@@ -107,7 +108,12 @@ def epc_pipeline_flow(
     if dry_run:
         for task_name in plan:
             log.info("Dry run task: %s", task_name)
-        return {"status": "dry_run", "mode": mode, "planned_tasks": plan}
+        return {
+            "status": "dry_run",
+            "mode": mode,
+            "planned_tasks": plan,
+            "prefect_available": PREFECT_AVAILABLE,
+        }
 
     download_or_merge_epc(mode=mode, skip_download=skip_download, dry_run=False)
     clean_south_west(dry_run=False)
@@ -121,4 +127,11 @@ def epc_pipeline_flow(
     write_manifest(dry_run=False)
     register_artifacts(dry_run=False)
 
-    return {"status": "completed", "mode": mode, "planned_tasks": plan}
+    return {
+        "status": "completed",
+        "mode": mode,
+        "planned_tasks": plan,
+        # Surfaced so a run that silently degraded to plain sequential calls is
+        # visible in the result rather than indistinguishable from a real one.
+        "prefect_available": PREFECT_AVAILABLE,
+    }
