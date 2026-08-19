@@ -9,7 +9,6 @@ one archive per local authority. See spec section 0.
 
 from __future__ import annotations
 
-import concurrent.futures as futures
 import glob
 import os
 import re
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 import requests
-from tqdm import tqdm
 
 from config import (
     ANALYSIS_AUTHORITIES,
@@ -34,14 +32,102 @@ DOMESTIC_CSV_INFO_ENDPOINT = f"{API_BASE}/api/files/domestic/csv/info"
 TIMEOUT = 120
 MAX_WORKERS = 4
 
-_DOWNLOAD_PATH_NOT_MIGRATED = (
-    "{fn} still targets the retired epc.opendatacommunities.org host, which "
-    "301-redirects to an HTML landing page instead of serving JSON — the same "
-    "failure this redesign exists to fix. The EPC service moved to GOV.UK (see "
-    "spec section 0). Migrating this download path to the new API and bearer "
-    "auth is tracked as R8/R9 and not yet implemented. In the meantime, "
-    "`ewhei ingest` works on already-extracted local sources."
-)
+# The rebuilt service serves one national archive containing CSVs by year, not
+# one archive per period or authority, so there is no listing step and nothing
+# to select. A single stable filename keeps the cache-and-validate logic intact.
+DOMESTIC_ARCHIVE_NAME = "domestic-full-load.zip"
+
+
+def _require_json(response: requests.Response, url: str) -> dict:
+    """Parse a JSON response, failing with the cause rather than a decode error.
+
+    This guard exists because of the failure that prompted the whole migration:
+    the retired host 301-redirected to an HTML landing page, so
+    ``raise_for_status()`` saw a 200 and passed, and ``.json()`` then died with
+    "Expecting value: line 1 column 1 (char 0)" — a message that names neither
+    the redirect nor the content type. A 2xx is not evidence of JSON.
+    """
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    if "json" not in content_type:
+        redirected = response.url != url
+        hint = (
+            f" The request was redirected to {response.url}, which usually means "
+            "the endpoint moved."
+            if redirected
+            else ""
+        )
+        raise RuntimeError(
+            f"Expected JSON from {url} but received Content-Type "
+            f"{content_type or '(none)'} with status {response.status_code}.{hint}"
+        )
+    return response.json()
+
+
+def fetch_download_info(headers: dict) -> dict:
+    """Return ``{"fileSize": int, "lastUpdated": str}`` for the national archive.
+
+    Used to validate the download completed: comparing bytes written against the
+    advertised size catches a truncated transfer that would otherwise be cached
+    as a valid-looking file.
+    """
+    response = requests.get(DOMESTIC_CSV_INFO_ENDPOINT, headers=headers, timeout=TIMEOUT)
+    response.raise_for_status()
+    payload = _require_json(response, DOMESTIC_CSV_INFO_ENDPOINT)
+    return payload.get("data", {})
+
+
+def download_full_load(
+    headers: dict,
+    expected_bytes: int | None = None,
+    dest: Path | None = None,
+) -> str:
+    """Download the national domestic archive atomically.
+
+    The endpoint answers 302 with a presigned object-store URL. ``requests``
+    follows it and drops the Authorization header across the host change, which
+    is correct here — the presigned URL carries its own credentials, and
+    forwarding a bearer token to a third-party host would leak it.
+
+    Writes to a ``.part`` file and renames only on success, so an interrupted
+    transfer never leaves a truncated archive that a later run mistakes for a
+    complete cache.
+    """
+    out_path = Path(dest) if dest is not None else Path(RAW_BULK_DIR) / DOMESTIC_ARCHIVE_NAME
+
+    if out_path.exists():
+        if _is_valid_zip(out_path):
+            return f"Skipped (valid cache): {out_path.name}"
+        out_path.unlink()  # corrupt or partial cache — fetch again
+
+    tmp_path = out_path.with_name(out_path.name + ".part")
+    written = 0
+    try:
+        with requests.get(
+            DOMESTIC_CSV_ENDPOINT,
+            headers=headers,
+            stream=True,
+            timeout=TIMEOUT,
+            allow_redirects=True,
+        ) as response:
+            response.raise_for_status()
+            with open(tmp_path, "wb") as handle:
+                for chunk in response.iter_content(8 << 20):  # 8 MB
+                    handle.write(chunk)
+                    written += len(chunk)
+
+        if expected_bytes is not None and written != expected_bytes:
+            raise RuntimeError(
+                f"Download truncated: wrote {written:,} bytes but the service "
+                f"advertised {expected_bytes:,}. Not caching a partial archive."
+            )
+
+        os.replace(tmp_path, out_path)  # atomic within a filesystem
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    return f"Downloaded: {out_path.name} ({written:,} bytes)"
+
 
 # 'domestic-2025-09' or 'domestic-2024', with or without a .zip suffix.
 _PERIOD_RE = re.compile(r"^domestic-(\d{4}(?:-\d{2})?)(?:\.zip)?$")
@@ -92,55 +178,26 @@ def _is_valid_zip(path) -> bool:
 
 
 def download_one_file(args) -> str:
-    """Download one EPC zip file atomically.
+    """Retired: the service no longer exposes per-file downloads.
 
-    Writes to a temporary ``.part`` file and renames to the final path only on
-    success, so an interrupted download never leaves a truncated file that later
-    looks like a complete cache. An existing cached zip is validated before
-    skipping; if it is corrupt/partial it is removed and re-downloaded.
+    Kept as an explicit refusal rather than deleted, because `main()` and the
+    Prefect task historically called it and a missing name would surface as an
+    ImportError far from the cause.
     """
-    raise NotImplementedError(_DOWNLOAD_PATH_NOT_MIGRATED.format(fn="download_one_file"))
-
-    fname, headers = args
-    url = f"https://epc.opendatacommunities.org/api/v1/files/{fname}"
-    out_path = RAW_BULK_DIR / fname
-
-    if out_path.exists():
-        if _is_valid_zip(out_path):
-            return f"✓ Skipped (exists): {fname}"
-        out_path.unlink()  # corrupt/partial cache — re-download
-        re_dl = True
-    else:
-        re_dl = False
-
-    tmp_path = out_path.with_name(out_path.name + ".part")
-    try:
-        with requests.get(url, headers=headers, stream=True, timeout=TIMEOUT) as r:
-            r.raise_for_status()
-            with open(tmp_path, "wb") as f:
-                for chunk in r.iter_content(8 << 20):  # 8 MB chunks
-                    f.write(chunk)
-        os.replace(tmp_path, out_path)  # atomic on the same filesystem
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()  # clean up on any failure
-
-    return f"⬇️  Re-downloaded (was corrupt): {fname}" if re_dl else f"⬇️  Downloaded: {fname}"
+    del args
+    raise NotImplementedError(
+        "Per-file download is retired. The rebuilt EPC service serves one "
+        "national archive; use download_full_load() instead."
+    )
 
 
 def download_all(headers: dict, candidates: list[str]) -> None:
-    """Download all candidate files in parallel."""
-    if not candidates:
-        print("No candidate files to download.")
-        return
-
-    print(f"Downloading {len(candidates)} files...")
-    with futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        for msg in tqdm(
-            executor.map(download_one_file, [(c, headers) for c in candidates]),
-            total=len(candidates),
-        ):
-            print(msg)
+    """Retired alongside download_one_file()."""
+    del headers, candidates
+    raise NotImplementedError(
+        "Per-file download is retired. The rebuilt EPC service serves one "
+        "national archive; use download_full_load() instead."
+    )
 
 
 def extract_all_zips() -> None:

@@ -61,14 +61,14 @@ def test_is_valid_zip_accepts_real_zip(tmp_path):
 def test_download_one_file_refuses_with_migration_message():
     """The download path still targets the retired opendatacommunities host —
     it must refuse loudly rather than fail deep inside with a JSONDecodeError."""
-    with pytest.raises(NotImplementedError, match="R8/R9"):
+    with pytest.raises(NotImplementedError, match="retired"):
         epc_source.download_one_file(("domestic-2025-09.zip", {}))
 
 
 def test_list_available_files_refuses_with_migration_message():
     from scripts.pipeline import epc_download_merge_fast as legacy
 
-    with pytest.raises(NotImplementedError, match="R8/R9"):
+    with pytest.raises(NotImplementedError, match="retired"):
         legacy.list_available_files({})
 
 

@@ -22,17 +22,17 @@ import glob
 import os
 
 import pandas as pd
-import requests
 
 from config import EPC_MERGED_CSV, RAW_EXTRACT_DIR
 from ew_housing_energy_impact.ingestion.epc_source import (  # noqa: F401
-    _DOWNLOAD_PATH_NOT_MIGRATED,
     _is_valid_zip,
     auth_headers,
     download_all,
+    download_full_load,
     download_one_file,
     ensure_dirs,
     extract_all_zips,
+    fetch_download_info,
 )
 from scripts.pipeline.schemas import CORE_COLS, CORE_DTYPES
 
@@ -53,15 +53,11 @@ DTYPES = CORE_DTYPES
 
 def list_available_files(headers: dict) -> dict:
     """Get list of all files available via EPC API."""
-    raise NotImplementedError(_DOWNLOAD_PATH_NOT_MIGRATED.format(fn="list_available_files"))
-
-    resp = requests.get(
-        "https://epc.opendatacommunities.org/api/v1/files",
-        headers={**headers, "Accept": "application/json"},
-        timeout=TIMEOUT,
+    del headers
+    raise NotImplementedError(
+        "Listing individual files is retired. The rebuilt EPC service serves "
+        "one national archive; download_full_load() fetches it directly."
     )
-    resp.raise_for_status()
-    return resp.json().get("files", {})
 
 
 def pick_year_from_name(name: str) -> int | None:
@@ -103,29 +99,28 @@ def merge_core_columns() -> None:
 
 
 def main(mode: str = "la") -> None:
-    """Full pipeline: authenticate, list, download, extract, merge.
+    """Download the national EPC archive, extract it, and merge core columns.
 
     Args:
         mode: accepted for backward compatibility with existing callers (the
             Prefect task, the CLI). No longer changes behaviour — the rebuilt
-            EPC service serves one national archive per period rather than
-            one archive per local authority, so there is no per-authority
-            selection to branch on any more.
+            EPC service serves one national archive rather than one per local
+            authority, so there is nothing to select between.
     """
+    del mode
+
     ensure_dirs()
     os.makedirs(EPC_MERGED_CSV.parent, exist_ok=True)
     headers = auth_headers()
-    files = list_available_files(headers)
 
-    candidates = []
-    for name in files.keys():
-        year = pick_year_from_name(name)
-        if year and (YEARS is None or year in YEARS):
-            candidates.append(name)
-    candidates.sort()
-    print(f"Found {len(candidates)} annual bulk zips.")
+    # Ask for the advertised size first so a truncated transfer is caught rather
+    # than cached as a valid-looking archive.
+    info = fetch_download_info(headers)
+    expected = info.get("fileSize")
+    if expected:
+        print(f"Archive is {int(expected):,} bytes, last updated {info.get('lastUpdated')}.")
 
-    download_all(headers, candidates)
+    print(download_full_load(headers, expected_bytes=expected))
     extract_all_zips()
     merge_core_columns()
 
