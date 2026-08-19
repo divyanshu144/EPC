@@ -200,6 +200,72 @@ def download_all(headers: dict, candidates: list[str]) -> None:
     )
 
 
+_FULL_LOAD_MEMBER = re.compile(r"^(certificates|recommendations)-(\d{4})\.csv$")
+
+
+def extract_full_load(
+    archive: Path | None = None,
+    kinds: tuple[str, ...] = ("certificates",),
+    dest_root: Path | None = None,
+) -> list[ExtractedSource]:
+    """Extract the national archive, normalising its layout to the per-period one.
+
+    The full-load archive is flat, with per-year filenames::
+
+        certificates-2008.csv … certificates-2026.csv
+        recommendations-2008.csv … recommendations-2026.csv
+
+    The rest of the pipeline expects ``domestic-<period>/<kind>.csv`` — the shape
+    the monthly archives already have. Rather than teach every downstream consumer
+    a second layout, normalise here, at the boundary where the difference enters.
+    ``iter_extracted_sources`` and ``merge_core_columns`` then work unchanged.
+
+    ``kinds`` defaults to certificates only. Recommendations are 69.7 GB
+    uncompressed against 27.4 GB for certificates, and nothing consumes them yet
+    (they exist for the AI lane, spec D4). The archive is retained, so extracting
+    them later costs nothing but time.
+    """
+    archive_path = (
+        Path(archive) if archive is not None else Path(RAW_BULK_DIR) / DOMESTIC_ARCHIVE_NAME
+    )
+    root = Path(dest_root) if dest_root is not None else Path(RAW_EXTRACT_DIR)
+
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Archive not found: {archive_path}")
+
+    extracted: list[ExtractedSource] = []
+    with zipfile.ZipFile(archive_path) as zf:
+        for member in zf.namelist():
+            match = _FULL_LOAD_MEMBER.match(Path(member).name)
+            if match is None:
+                continue
+            kind, year = match.group(1), match.group(2)
+            if kind not in kinds:
+                continue
+
+            target_dir = root / f"domestic-{year}"
+            target = target_dir / f"{kind}.csv"
+            if target.exists():
+                extracted.append(ExtractedSource(year, kind, target))
+                continue
+
+            os.makedirs(target_dir, exist_ok=True)
+            # Stream rather than read whole: individual members reach 6 GB.
+            tmp = target.with_name(target.name + ".part")
+            try:
+                with zf.open(member) as src, open(tmp, "wb") as dst:
+                    while chunk := src.read(8 << 20):
+                        dst.write(chunk)
+                os.replace(tmp, target)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
+
+            extracted.append(ExtractedSource(year, kind, target))
+
+    return sorted(extracted)
+
+
 def extract_all_zips() -> None:
     """Unzip all downloaded EPC archives."""
     for zip_path in glob.glob(str(RAW_BULK_DIR / "*.zip")):
