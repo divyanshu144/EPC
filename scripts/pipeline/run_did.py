@@ -83,7 +83,7 @@ _BASE_RHS_COLS: list[str] = [
 
 # Event-study specification: year dummies (2008 = reference, dropped by patsy).
 # Produces one coefficient per year, showing exactly when trends shift.
-EVENT_STUDY_RHS = "C(YEAR)" + _CONTROLS
+EVENT_STUDY_RHS = "C(YEAR_TERM)" + _CONTROLS
 
 # Policy-period boundary years for event-study annotation lines.
 # Each value is the LAST year of the preceding period.
@@ -106,6 +106,34 @@ def prepare_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
     if "BELOW_C_INT" not in df.columns:
         df["BELOW_C_INT"] = df["BELOW_C"].astype(int)
     df["POLICY_PERIOD"] = pd.Categorical(df["POLICY_PERIOD"], categories=POLICY_ORDER, ordered=True)
+
+    # EVENT_STUDY_RHS refers to C(YEAR), but set_index moves YEAR out of the
+    # columns and formulaic resolves formula terms against columns only — so the
+    # event study raised "NameError: name 'YEAR' is not defined". Keep an
+    # explicit column alongside the index level. Named separately rather than
+    # using drop=False so the index level and the regressor are unambiguous.
+    df["YEAR_TERM"] = df["YEAR"]
+
+    # Drop rows outside the defined policy periods, explicitly and loudly.
+    #
+    # policy_period() returns "Other" beyond the scheme's final year, which the
+    # Categorical above turns into NaN. Those rows were being discarded anyway —
+    # PanelOLS drops any row with NaN in a model term — but silently, and
+    # MixedLM in clustering_from_random_effects fails outright on them with an
+    # opaque "Shape mismatch between endog/exog and extra 2d arrays".
+    #
+    # Excluding here makes the scope of the analysis a stated decision rather
+    # than a side effect of NaN handling. The excluded year is also partial, so
+    # including it would understate that year in the event study regardless.
+    outside = df["POLICY_PERIOD"].isna()
+    if outside.any():
+        years = sorted(df.loc[outside, "YEAR"].dropna().unique())
+        print(
+            f"Excluding {int(outside.sum()):,} rows outside the defined policy "
+            f"periods (years: {', '.join(str(y) for y in years)})."
+        )
+        df = df[~outside]
+
     df = df.set_index(["LOCAL_AUTHORITY", "YEAR"]).sort_index()
     return df
 
@@ -302,7 +330,7 @@ def extract_event_study(res, ref_year: int) -> pd.DataFrame:
 
     Returns a DataFrame with columns: year, coef, se, lower_95, upper_95.
     """
-    prefix = "C(YEAR)"
+    prefix = "C(YEAR_TERM)"
     params = res.params.filter(like=prefix)
     se = res.std_errors.filter(like=prefix)
 
@@ -583,7 +611,25 @@ def clustering_from_random_effects(
     re_df.to_csv(TABLE_DIR / f"{out_prefix}_clusters.csv", index=False)
 
 
-def main() -> None:
+def main(bootstrap: int = 999) -> None:
+    """Fit the policy models and write tables and figures.
+
+    Args:
+        bootstrap: wild cluster bootstrap replications. Set to 0 to skip the
+            bootstrap and leave ``wcb_pval`` empty, reporting clustered SEs
+            only.
+
+            Skipping is a deliberate mode, not a shortcut. On the full
+            2.68M-row panel one PanelOLS fit takes ~19s, so B=999 across three
+            dependent variables is ~15.7 hours, while every other output in
+            this module takes seconds. Separating them lets the coefficients,
+            event study, heterogeneity splits and clustering land immediately
+            and the bootstrap run afterwards.
+
+            Anything written with bootstrap=0 must not be presented as final
+            inference: with 14 clusters the clustered SEs are precisely what
+            the bootstrap exists to replace (Cameron, Gelbach & Miller 2008).
+    """
     df = load_data()
     df_panel = prepare_panel(df)
 
@@ -593,11 +639,15 @@ def main() -> None:
     res_co2 = fit_fe(df_panel, "CO2_EMISSIONS_CURRENT")
     res_belowc = fit_fe(df_panel, "BELOW_C_INT")
 
-    # Wild cluster bootstrap p-values (B=999, valid for 14 clusters)
-    print("Running wild cluster bootstrap (B=999) — this may take a few minutes...")
-    wcb_epc = wild_cluster_bootstrap_pvalues(df_panel, "CURRENT_ENERGY_EFFICIENCY")
-    wcb_co2 = wild_cluster_bootstrap_pvalues(df_panel, "CO2_EMISSIONS_CURRENT")
-    wcb_belowc = wild_cluster_bootstrap_pvalues(df_panel, "BELOW_C_INT")
+    if bootstrap:
+        print(f"Running wild cluster bootstrap (B={bootstrap})...")
+        wcb_epc = wild_cluster_bootstrap_pvalues(df_panel, "CURRENT_ENERGY_EFFICIENCY", B=bootstrap)
+        wcb_co2 = wild_cluster_bootstrap_pvalues(df_panel, "CO2_EMISSIONS_CURRENT", B=bootstrap)
+        wcb_belowc = wild_cluster_bootstrap_pvalues(df_panel, "BELOW_C_INT", B=bootstrap)
+    else:
+        print("Skipping wild cluster bootstrap (bootstrap=0); wcb_pval will be empty.")
+        print("  Clustered SEs with 14 clusters are NOT reliable inference on their own.")
+        wcb_epc = wcb_co2 = wcb_belowc = None
 
     epc_eff = extract_policy_effects(res_epc, wcb_pvalues=wcb_epc)
     co2_eff = extract_policy_effects(res_co2, wcb_pvalues=wcb_co2)
