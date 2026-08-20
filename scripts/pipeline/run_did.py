@@ -134,6 +134,26 @@ def prepare_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
         )
         df = df[~outside]
 
+    # Drop rows with a missing model term, so the estimation sample is defined
+    # by the panel rather than by each estimator's own NaN handling.
+    #
+    # PanelOLS and formulaic disagree here: formulaic encodes a missing
+    # categorical as its own level and keeps the row, so PanelOLS retained 4
+    # rows with a NaN PROPERTY_TYPE that a plain non-NaN mask excludes. The
+    # wild cluster bootstrap reconstructs the estimation sample positionally
+    # from exactly such a mask, and its guard correctly refused to run on the
+    # 4-row mismatch. Removing the ambiguity is better than teaching the
+    # bootstrap to reproduce a quirk.
+    model_terms = [c for c in _BASE_RHS_COLS if c in df.columns]
+    incomplete = df[model_terms].isna().any(axis=1)
+    if incomplete.any():
+        counts = {c: int(df[c].isna().sum()) for c in model_terms if df[c].isna().any()}
+        print(
+            f"Excluding {int(incomplete.sum()):,} rows with a missing model term "
+            f"({', '.join(f'{k}={v:,}' for k, v in counts.items())})."
+        )
+        df = df[~incomplete]
+
     df = df.set_index(["LOCAL_AUTHORITY", "YEAR"]).sort_index()
     return df
 
