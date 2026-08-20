@@ -34,6 +34,7 @@ from ew_housing_energy_impact.ingestion.epc_source import (  # noqa: F401
     extract_all_zips,
     fetch_download_info,
 )
+from scripts.pipeline.full_load_schema import normalise_full_load_columns, resolve_usecols
 from scripts.pipeline.schemas import CORE_COLS, CORE_DTYPES
 
 # -------------- CONFIG -------------- #
@@ -71,7 +72,15 @@ def pick_year_from_name(name: str) -> int | None:
 
 
 def merge_core_columns() -> None:
-    """Merge certificates.csv from all years into one master CSV."""
+    """Merge every year's certificates.csv into one master CSV.
+
+    Column names are resolved per file rather than assumed. The full-load
+    archive and the older monthly archives use different vocabularies — the
+    former is lowercase with `certificate_number` and `uprn` where the latter
+    had `LMK_KEY` and `BUILDING_REFERENCE_NUMBER` — so reading with a fixed
+    `usecols=CORE_COLS` fails outright against the full load. Resolving from
+    each file's own header lets both shapes merge into one canonical output.
+    """
     csv_files = sorted(glob.glob(str(RAW_EXTRACT_DIR / "*" / "certificates.csv")))
     if not csv_files:
         print("No certificates.csv files found.")
@@ -83,16 +92,28 @@ def merge_core_columns() -> None:
 
     first = True
     for csv_file in csv_files:
-        print(f"Merging {csv_file} ...")
+        header = pd.read_csv(csv_file, nrows=0).columns.tolist()
+        usecols, rename_map = resolve_usecols(CORE_COLS, header)
+        if not usecols:
+            print(f"Skipping {csv_file}: no recognised columns.")
+            continue
+
+        missing = sorted(set(CORE_COLS) - set(rename_map.values()))
+        note = f"  (absent: {', '.join(missing)})" if missing else ""
+        print(f"Merging {csv_file} ...{note}")
+
         for chunk in pd.read_csv(
             csv_file,
-            usecols=CORE_COLS,
-            dtype=DTYPES,
+            usecols=usecols,
+            dtype=str,
             chunksize=CHUNK,
             low_memory=True,
         ):
-            mode, header = ("w", True) if first else ("a", False)
-            chunk.to_csv(OUT_PATH, index=False, mode=mode, header=header)
+            chunk = normalise_full_load_columns(chunk.rename(columns=rename_map))
+            # Keep a stable column order so appended chunks line up.
+            chunk = chunk.reindex(columns=[c for c in CORE_COLS if c in chunk.columns])
+            mode, header_flag = ("w", True) if first else ("a", False)
+            chunk.to_csv(OUT_PATH, index=False, mode=mode, header=header_flag)
             first = False
 
     print(f"✓ Merged output saved to: {OUT_PATH}")
