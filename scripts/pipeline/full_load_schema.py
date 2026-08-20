@@ -36,6 +36,8 @@ each file, so it is a lower bound rather than the true rate.
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 # Columns whose name changed outright. Case-only differences are handled
@@ -93,6 +95,9 @@ def normalise_full_load_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.rename(columns=renamed)
 
+    for column in JSON_VALUED_COLUMNS & set(out.columns):
+        out[column] = coerce_json_valued_numeric(out[column])
+
     if "BUILDING_REFERENCE_NUMBER" in out.columns:
         out["BUILDING_REFERENCE_NUMBER"] = _fill_missing_property_keys(
             out["BUILDING_REFERENCE_NUMBER"],
@@ -126,3 +131,43 @@ def _fill_missing_property_keys(keys: pd.Series, certificate_ids: pd.Series | No
         )
 
     return keys.where(~blank, fallback)
+
+
+# Columns that carry a legacy JSON representation in early years of the
+# full-load archive: `{"value": 1.5, "quantity": "tonnes per year"}` instead of
+# `1.5`. Measured on the real archive: 23.9% of 2008, 4.7% of 2012, 0% from 2016.
+JSON_VALUED_COLUMNS: frozenset[str] = frozenset(
+    {
+        "CO2_EMISSIONS_CURRENT",
+        "CO2_EMISSIONS_POTENTIAL",
+        "CO2_EMISS_CURR_PER_FLOOR_AREA",
+    }
+)
+
+_JSON_VALUE = re.compile(r'"value"\s*:\s*(-?\d+(?:\.\d+)?)')
+
+
+def coerce_json_valued_numeric(series: pd.Series) -> pd.Series:
+    """Convert a column that mixes plain numbers with JSON-wrapped ones.
+
+    Why this is not simply ``pd.to_numeric(errors="coerce")``: the JSON form is
+    concentrated in 2008-2012, the Pre-GreenDeal baseline that every policy
+    coefficient is measured against. Coercion would null a quarter of the
+    baseline's CO2 readings while later periods lost none; PanelOLS drops rows
+    with NaN in any model term, so the panel would silently lose observations
+    non-randomly along the very dimension the study is about. The model would
+    still run, and every CO2 estimate would be wrong.
+
+    The number is present in the JSON, so it is extracted rather than discarded.
+    Genuinely absent values still become NaN — the goal is to stop throwing away
+    data that is there, not to salvage data that is not.
+    """
+    text = series.astype("string")
+    numeric = pd.to_numeric(text, errors="coerce")
+
+    needs_parse = numeric.isna() & text.notna() & text.str.contains(r'"value"', na=False)
+    if needs_parse.any():
+        extracted = text[needs_parse].str.extract(_JSON_VALUE, expand=False)
+        numeric.loc[needs_parse] = pd.to_numeric(extracted, errors="coerce")
+
+    return numeric
