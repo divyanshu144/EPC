@@ -81,8 +81,22 @@ def numeric_drift(
         abs_shift = (
             abs(cur_mean - ref_mean) if pd.notna(ref_mean) and pd.notna(cur_mean) else np.nan
         )
-        denominator = max(abs(ref_mean), 1.0) if pd.notna(ref_mean) else 1.0
-        relative_shift = abs_shift / denominator if pd.notna(abs_shift) else np.nan
+        # Relative shift must be scale invariant. The previous denominator was
+        # max(abs(ref_mean), 1.0), whose 1.0 floor turned the "relative" shift
+        # into an absolute one for any column with a mean below 1 — which is
+        # every rate and proportion here, including BELOW_C, a model target.
+        # BELOW_C moving 0.40 -> 0.55 is a 37.5% change; it reported 0.150
+        # against a 0.20 threshold and raised no alert.
+        #
+        # A zero reference mean leaves relative change undefined, so fall back to
+        # the absolute shift: a column that was always zero and is now non-zero
+        # is real drift and must still alert.
+        if pd.isna(abs_shift):
+            relative_shift = np.nan
+        elif ref_mean == 0:
+            relative_shift = abs_shift
+        else:
+            relative_shift = abs_shift / abs(ref_mean)
         ref_missing = float(ref.isna().mean()) if len(ref) else 0.0
         cur_missing = float(cur.isna().mean()) if len(cur) else 0.0
         missing_shift = abs(cur_missing - ref_missing)

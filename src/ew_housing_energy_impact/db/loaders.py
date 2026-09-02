@@ -56,6 +56,39 @@ def _none_if_missing(value: Any) -> Any:
     return None if pd.isna(value) else value
 
 
+def _require_grouping_keys(df: pd.DataFrame, columns: list[str], table: str) -> None:
+    """Fail loudly when a grouping key is missing, naming the column and row count.
+
+    These columns identify the row; a gap in one is not a missing measurement but
+    a broken upstream stage — the geography rollup or the year derivation. Two
+    failure modes made that invisible:
+
+    * ``groupby(..., dropna=False)`` keeps NaN groups, and ``str(NaN)`` yields the
+      literal string ``"nan"``, so a missing authority was written to the serving
+      database and surfaced in /authorities as though it were real.
+    * The same NaN reached ``int(NaN)`` for YEAR and raised "cannot convert float
+      NaN to integer", naming no column and no row.
+
+    Raising here converts both into one message that says what is wrong and how
+    much of the data it affects.
+    """
+    problems = []
+    for column in columns:
+        if column not in df.columns:
+            continue
+        n_missing = int(df[column].isna().sum())
+        if n_missing:
+            problems.append(f"{column} ({n_missing} rows)")
+
+    if problems:
+        raise ValueError(
+            f"Cannot load {table}: grouping keys contain missing values — "
+            f"{', '.join(problems)}. These identify the row, so a gap means an "
+            f"upstream stage failed (geography rollup or year derivation). "
+            f"Fix the source data rather than dropping the rows."
+        )
+
+
 def _optional_mean(grouped, column: str) -> pd.Series | None:
     source = grouped.obj
     if column not in source.columns:
@@ -84,6 +117,8 @@ def load_authority_year_summary(
         raise ValueError(
             f"Cannot load authority-year summaries; missing columns: {sorted(missing)}"
         )
+
+    _require_grouping_keys(df, ["LOCAL_AUTHORITY", "YEAR"], "authority_year_summary")
 
     grouped = df.groupby(["LOCAL_AUTHORITY", "YEAR"], dropna=False)
     summary = grouped.agg(
@@ -147,6 +182,10 @@ def load_policy_period_summary(
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Cannot load policy summaries; missing columns: {sorted(missing)}")
+
+    # Same failure as authority_year_summary: str(NaN) becomes "nan" and would be
+    # written as a real policy period or authority.
+    _require_grouping_keys(df, ["POLICY_PERIOD", "LOCAL_AUTHORITY"], "policy_period_summary")
 
     if replace:
         session.execute(delete(PolicyPeriodSummary))

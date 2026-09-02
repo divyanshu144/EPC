@@ -1,0 +1,328 @@
+"""Download, validate and extract EPC bulk source archives.
+
+The EPC service moved to GOV.UK in 2025: the old opendatacommunities host
+301-redirects to an HTML landing page, so a request there returns 200 with a
+body that is not JSON. Auth changed from Basic to Bearer at the same time, and
+the bulk endpoint now serves one national archive split by period rather than
+one archive per local authority. See spec section 0.
+"""
+
+from __future__ import annotations
+
+import glob
+import os
+import re
+import zipfile
+from pathlib import Path
+from typing import NamedTuple
+
+import requests
+
+from config import (
+    ANALYSIS_AUTHORITIES,
+    CODE_TO_ANALYSIS_AUTHORITY,
+    RAW_BULK_DIR,
+    RAW_EXTRACT_DIR,
+)
+
+API_BASE = "https://api.get-energy-performance-data.communities.gov.uk"
+DOMESTIC_CSV_ENDPOINT = f"{API_BASE}/api/files/domestic/csv"
+DOMESTIC_CSV_INFO_ENDPOINT = f"{API_BASE}/api/files/domestic/csv/info"
+
+TIMEOUT = 120
+MAX_WORKERS = 4
+
+# The rebuilt service serves one national archive containing CSVs by year, not
+# one archive per period or authority, so there is no listing step and nothing
+# to select. A single stable filename keeps the cache-and-validate logic intact.
+DOMESTIC_ARCHIVE_NAME = "domestic-full-load.zip"
+
+
+def _require_json(response: requests.Response, url: str) -> dict:
+    """Parse a JSON response, failing with the cause rather than a decode error.
+
+    This guard exists because of the failure that prompted the whole migration:
+    the retired host 301-redirected to an HTML landing page, so
+    ``raise_for_status()`` saw a 200 and passed, and ``.json()`` then died with
+    "Expecting value: line 1 column 1 (char 0)" — a message that names neither
+    the redirect nor the content type. A 2xx is not evidence of JSON.
+    """
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    if "json" not in content_type:
+        redirected = response.url != url
+        hint = (
+            f" The request was redirected to {response.url}, which usually means "
+            "the endpoint moved."
+            if redirected
+            else ""
+        )
+        raise RuntimeError(
+            f"Expected JSON from {url} but received Content-Type "
+            f"{content_type or '(none)'} with status {response.status_code}.{hint}"
+        )
+    return response.json()
+
+
+def fetch_download_info(headers: dict) -> dict:
+    """Return ``{"fileSize": int, "lastUpdated": str}`` for the national archive.
+
+    Used to validate the download completed: comparing bytes written against the
+    advertised size catches a truncated transfer that would otherwise be cached
+    as a valid-looking file.
+    """
+    response = requests.get(DOMESTIC_CSV_INFO_ENDPOINT, headers=headers, timeout=TIMEOUT)
+    response.raise_for_status()
+    payload = _require_json(response, DOMESTIC_CSV_INFO_ENDPOINT)
+    return payload.get("data", {})
+
+
+def download_full_load(
+    headers: dict,
+    expected_bytes: int | None = None,
+    dest: Path | None = None,
+) -> str:
+    """Download the national domestic archive atomically.
+
+    The endpoint answers 302 with a presigned object-store URL. ``requests``
+    follows it and drops the Authorization header across the host change, which
+    is correct here — the presigned URL carries its own credentials, and
+    forwarding a bearer token to a third-party host would leak it.
+
+    Writes to a ``.part`` file and renames only on success, so an interrupted
+    transfer never leaves a truncated archive that a later run mistakes for a
+    complete cache.
+    """
+    out_path = Path(dest) if dest is not None else Path(RAW_BULK_DIR) / DOMESTIC_ARCHIVE_NAME
+
+    if out_path.exists():
+        if _is_valid_zip(out_path):
+            return f"Skipped (valid cache): {out_path.name}"
+        out_path.unlink()  # corrupt or partial cache — fetch again
+
+    tmp_path = out_path.with_name(out_path.name + ".part")
+    written = 0
+    try:
+        with requests.get(
+            DOMESTIC_CSV_ENDPOINT,
+            headers=headers,
+            stream=True,
+            timeout=TIMEOUT,
+            allow_redirects=True,
+        ) as response:
+            response.raise_for_status()
+            with open(tmp_path, "wb") as handle:
+                for chunk in response.iter_content(8 << 20):  # 8 MB
+                    handle.write(chunk)
+                    written += len(chunk)
+
+        if expected_bytes is not None and written != expected_bytes:
+            raise RuntimeError(
+                f"Download truncated: wrote {written:,} bytes but the service "
+                f"advertised {expected_bytes:,}. Not caching a partial archive."
+            )
+
+        os.replace(tmp_path, out_path)  # atomic within a filesystem
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    return f"Downloaded: {out_path.name} ({written:,} bytes)"
+
+
+# 'domestic-2025-09' or 'domestic-2024', with or without a .zip suffix.
+_PERIOD_RE = re.compile(r"^domestic-(\d{4}(?:-\d{2})?)(?:\.zip)?$")
+
+
+def auth_headers() -> dict:
+    """Bearer auth for the rebuilt EPC service.
+
+    The token comes from the account page on the service website; there is no
+    programmatic way to mint one. EPC_EMAIL/EPC_API_KEY are obsolete.
+    """
+    from ew_housing_energy_impact.settings import get_settings
+
+    token = get_settings().epc_bearer_token
+    if not token:
+        raise ValueError("Missing EPC_BEARER_TOKEN — get one from your EPC account page")
+    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+
+def period_from_name(name: str) -> str | None:
+    """Extract the period from an archive or extracted-folder name.
+
+    'domestic-2025-09' -> '2025-09'; 'domestic-2024.zip' -> '2024'.
+    Returns None for anything that is not a domestic archive.
+    """
+    match = _PERIOD_RE.match(name)
+    return match.group(1) if match else None
+
+
+def ensure_dirs() -> None:
+    """Make sure output folders exist."""
+    for d in (RAW_BULK_DIR, RAW_EXTRACT_DIR):
+        os.makedirs(d, exist_ok=True)
+
+
+def _is_valid_zip(path) -> bool:
+    """Cheap integrity check: can the central directory be read?
+
+    A truncated/interrupted download has no valid end-of-central-directory
+    record, so ZipFile() raises BadZipFile. This validates the archive is
+    complete without paying the full-CRC cost of testzip() on large files.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return len(zf.namelist()) > 0
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def download_one_file(args) -> str:
+    """Retired: the service no longer exposes per-file downloads.
+
+    Kept as an explicit refusal rather than deleted, because `main()` and the
+    Prefect task historically called it and a missing name would surface as an
+    ImportError far from the cause.
+    """
+    del args
+    raise NotImplementedError(
+        "Per-file download is retired. The rebuilt EPC service serves one "
+        "national archive; use download_full_load() instead."
+    )
+
+
+def download_all(headers: dict, candidates: list[str]) -> None:
+    """Retired alongside download_one_file()."""
+    del headers, candidates
+    raise NotImplementedError(
+        "Per-file download is retired. The rebuilt EPC service serves one "
+        "national archive; use download_full_load() instead."
+    )
+
+
+_FULL_LOAD_MEMBER = re.compile(r"^(certificates|recommendations)-(\d{4})\.csv$")
+
+
+def extract_full_load(
+    archive: Path | None = None,
+    kinds: tuple[str, ...] = ("certificates",),
+    dest_root: Path | None = None,
+) -> list[ExtractedSource]:
+    """Extract the national archive, normalising its layout to the per-period one.
+
+    The full-load archive is flat, with per-year filenames::
+
+        certificates-2008.csv … certificates-2026.csv
+        recommendations-2008.csv … recommendations-2026.csv
+
+    The rest of the pipeline expects ``domestic-<period>/<kind>.csv`` — the shape
+    the monthly archives already have. Rather than teach every downstream consumer
+    a second layout, normalise here, at the boundary where the difference enters.
+    ``iter_extracted_sources`` and ``merge_core_columns`` then work unchanged.
+
+    ``kinds`` defaults to certificates only. Recommendations are 69.7 GB
+    uncompressed against 27.4 GB for certificates, and nothing consumes them yet
+    (they exist for the AI lane, spec D4). The archive is retained, so extracting
+    them later costs nothing but time.
+    """
+    archive_path = (
+        Path(archive) if archive is not None else Path(RAW_BULK_DIR) / DOMESTIC_ARCHIVE_NAME
+    )
+    root = Path(dest_root) if dest_root is not None else Path(RAW_EXTRACT_DIR)
+
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Archive not found: {archive_path}")
+
+    extracted: list[ExtractedSource] = []
+    with zipfile.ZipFile(archive_path) as zf:
+        for member in zf.namelist():
+            match = _FULL_LOAD_MEMBER.match(Path(member).name)
+            if match is None:
+                continue
+            kind, year = match.group(1), match.group(2)
+            if kind not in kinds:
+                continue
+
+            target_dir = root / f"domestic-{year}"
+            target = target_dir / f"{kind}.csv"
+            if target.exists():
+                extracted.append(ExtractedSource(year, kind, target))
+                continue
+
+            os.makedirs(target_dir, exist_ok=True)
+            # Stream rather than read whole: individual members reach 6 GB.
+            tmp = target.with_name(target.name + ".part")
+            try:
+                with zf.open(member) as src, open(tmp, "wb") as dst:
+                    while chunk := src.read(8 << 20):
+                        dst.write(chunk)
+                os.replace(tmp, target)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
+
+            extracted.append(ExtractedSource(year, kind, target))
+
+    return sorted(extracted)
+
+
+def extract_all_zips() -> None:
+    """Unzip all downloaded EPC archives."""
+    for zip_path in glob.glob(str(RAW_BULK_DIR / "*.zip")):
+        subfolder = os.path.splitext(os.path.basename(zip_path))[0]
+        dest = RAW_EXTRACT_DIR / subfolder
+        cert_csv = dest / "certificates.csv"
+
+        if cert_csv.exists():
+            continue  # skip already extracted
+
+        os.makedirs(dest, exist_ok=True)
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(dest)
+        except zipfile.BadZipFile as exc:
+            # The archive passed download validation but will not extract. Delete
+            # it so the next run re-downloads, and fail now rather than leaving a
+            # hole to be discovered after the load.
+            os.remove(zip_path)
+            raise RuntimeError(
+                f"Corrupt archive removed, re-run to re-download: {zip_path}"
+            ) from exc
+    print("✓ All archives extracted.")
+
+
+def _missing_analysis_authorities(matched: set[str]) -> list[str]:
+    """Analysis authorities with NO matched download file (panel-fatal gaps)."""
+    covered = {CODE_TO_ANALYSIS_AUTHORITY[c] for c in matched if c in CODE_TO_ANALYSIS_AUTHORITY}
+    return sorted(set(ANALYSIS_AUTHORITIES) - covered)
+
+
+SOURCE_KINDS = ("certificates", "recommendations")
+
+
+class ExtractedSource(NamedTuple):
+    """One extracted CSV belonging to one source period."""
+
+    period: str
+    kind: str
+    path: Path
+
+
+def iter_extracted_sources(root: Path | None = None) -> list[ExtractedSource]:
+    """List every certificates/recommendations CSV under the extract root.
+
+    Folders holding only metadata (columns.csv, schema.json, LICENCE.txt) yield
+    nothing — that is the state of the 2008-2024 folders locally, where the CSVs
+    were deleted to reclaim disk.
+    """
+    base = Path(root) if root is not None else Path(RAW_EXTRACT_DIR)
+    sources: list[ExtractedSource] = []
+    for folder in sorted(p for p in base.iterdir() if p.is_dir()):
+        period = period_from_name(folder.name)
+        if period is None:
+            continue
+        for kind in SOURCE_KINDS:
+            csv_path = folder / f"{kind}.csv"
+            if csv_path.exists():
+                sources.append(ExtractedSource(period, kind, csv_path))
+    return sources

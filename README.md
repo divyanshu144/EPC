@@ -1,258 +1,270 @@
 # EW Housing Energy Impact
 
-Production-style EPC housing-energy analytics platform for South West England:
-raw EPC bulk data to validated features, policy analytics, ML models, monitoring,
-FastAPI, Streamlit, and reproducible CI.
+A reproducible data engineering + analytics + ML platform that turns 1.8M+ raw
+UK Energy Performance Certificate (EPC) records into policy analysis, predictive
+models, and served APIs — built as a dissertation project and engineered like a
+production system.
 
-## 60-Second Pitch
+**Research question:** How has domestic energy efficiency in South West England
+changed across five UK housing-energy policy periods (2008–2025)?
 
-This project turns a dissertation-style EPC analysis into a data/ML platform that
-a team could operate and extend. It downloads and cleans UK Domestic EPC data,
-rolls messy lower-tier authorities into stable South West analysis groups,
-engineers modelling features, runs fixed-effects policy-period analysis, trains
-predictive models, tracks artifacts, monitors drift, and serves results through
-FastAPI and Streamlit.
+```bash
+pip install -r requirements.txt && pip install -e .
+make ci              # lint + format + 129 tests, no data or credentials required
+ewhei orchestrate --dry-run   # inspect the 11-stage Prefect plan
+```
 
-What makes it production-style:
+---
 
-- reproducible CLI and Prefect orchestration
-- optional PostgreSQL analytical serving tables
-- optional MLflow experiment tracking
-- validation reports, manifests, artifact registry hashes
-- lightweight drift reports with retraining recommendations
-- CSV/artifact fallback when optional services are unavailable
-- Ruff, pytest, Makefile, and GitHub Actions quality gate
+## Why this project is worth a look
 
-## Problem
+This isn't a notebook that computes a p-value once. It's a pipeline that has to
+keep working: it re-ingests monthly-changing government data, survives schema
+drift, splits ML data without leaking, does inference with too few clusters for
+textbook standard errors, and degrades cleanly when optional infrastructure
+(Postgres, MLflow) isn't running. That combination — real statistics, real data
+engineering, real ML hygiene — is the point.
 
-EPC data is large, event-based, and geographically awkward. Bulk files are
-published at lower-tier/unitary authority level, while the analysis needs stable
-South West authority groups. The project answers:
+| Area | What's demonstrated |
+|---|---|
+| **Data engineering** | Chunked ingestion of multi-GB government CSVs, geography normalization, S3 → Snowflake warehouse loading with reconciliation and schema-diff guards |
+| **Applied statistics** | Fixed-effects panel OLS, wild cluster bootstrap inference (14 clusters — too few for asymptotic clustered SEs), event-study design |
+| **ML engineering** | XGBoost + SHAP, property-level (not row-level) train/test split to prevent leakage, PCA + KMeans on model effects |
+| **Platform engineering** | Prefect orchestration, optional Postgres/MLflow with enforced fallback, FastAPI + Streamlit serving layers, Docker Compose |
+| **Software engineering rigor** | 129 tests (all offline — synthetic data, mocked S3/Snowflake/HTTP), Ruff-enforced style, GitHub Actions CI, artifact registry with SHA256 provenance |
 
-> How have EPC efficiency and carbon outcomes changed across South West England
-> during major UK housing-energy policy periods?
-
-The analysis is intentionally honest: policy models are fixed-effects
-policy-period models, not definitive causal DiD claims.
+---
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[EPC API bulk ZIPs] --> B[Ingestion and merge]
-  O[Prefect orchestration] --> B
-  B --> C[Cleaning and geography rollup]
-  C --> D[Feature engineering]
-  D --> E[EDA reports]
-  D --> F[Fixed-effects policy models]
-  D --> G[Predictive ML models]
-  D --> H[Validation, manifest, registry]
-  G --> M[Optional MLflow tracking]
-  D --> N[Drift monitoring]
-  H --> P[(Optional PostgreSQL summaries)]
-  P --> Q[FastAPI analytics]
-  H --> Q
-  N --> Q
-  Q --> S[Dashboard/demo consumers]
+  A[GOV.UK EPC bulk API] -->|Bearer auth| B[Download + extract]
+  B --> C[S3 raw archive]
+  C --> D[Snowflake raw layer]
+  B --> E[Clean: SW filter + geography rollup]
+  E --> F[Feature engineering]
+  F --> G[EDA]
+  F --> H[Fixed-effects models + WCB + event study]
+  F --> I[XGBoost + SHAP]
+  H --> J[Validation, manifest, artifact registry]
+  I --> J
+  I -.-> K[(Optional MLflow tracking)]
+  J -.-> L[(Optional PostgreSQL)]
+  J --> M[FastAPI]
+  L --> M
+  F --> N[Drift monitoring]
+  N --> M
+  O[Prefect orchestration] -.-> B
+  O -.-> E
+  O -.-> F
+  O -.-> H
+  O -.-> I
+  M --> P[Streamlit dashboard]
 ```
 
-Core CSV/report artifacts remain the source of truth. PostgreSQL and MLflow are
-optional local services, not required for tests or basic demos.
+CSV/report artifacts are the source of truth. Postgres, MLflow, and the
+S3/Snowflake warehouse path are optional layers — the pipeline, tests, and API
+all run without them via CSV fallback.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language / packaging | Python 3.11+, `setuptools` editable install, `ewhei` console entry point |
+| Data processing | pandas (chunked, 1M-row batches), NumPy, PyArrow |
+| Statistics | `linearmodels.PanelOLS` (fixed effects), `statsmodels`, custom wild cluster bootstrap (999 Rademacher draws) |
+| ML | XGBoost, scikit-learn, SHAP, PCA + KMeans |
+| Orchestration | Prefect 2 (11-task flow, dry-run planning, per-stage skip flags) |
+| Warehouse ingestion | boto3 (S3), `snowflake-connector-python`, reconciliation + header-diff guards |
+| Serving | FastAPI (11 routes), Streamlit dashboard |
+| Storage (optional) | PostgreSQL via SQLAlchemy 2.0, SQLite fallback |
+| Experiment tracking (optional) | MLflow |
+| Quality gates | Ruff (lint + format), pytest (129 tests), GitHub Actions CI |
+| Infra | Docker Compose (Postgres, MLflow, Jupyter, FastAPI, Streamlit — 5 services) |
+
+---
+
+## Hard problems this pipeline actually solves
+
+- **Too few clusters for standard inference.** With only 14 South West local
+  authorities, conventional clustered standard errors are unreliable (Cameron,
+  Gelbach & Miller, 2008). `run_did.py` runs a wild cluster bootstrap (B=999)
+  alongside standard clustered SEs for every policy-period coefficient.
+- **Geography that doesn't match the data source.** EPC bulk files are published
+  per lower-tier/unitary authority, not per stable analysis authority. The
+  pipeline rolls historical/lower-tier authorities into 14 consistent South West
+  groups while preserving the raw authority label for traceability
+  (`LOCAL_AUTHORITY_RAW`).
+- **ML leakage from repeat inspections.** The same property can have multiple EPC
+  certificates over time. Train/test splitting is done on
+  `BUILDING_REFERENCE_NUMBER` (property level), not row level, so no dwelling
+  appears in both sets.
+- **A government API that changed its data model mid-project.** The EPC service
+  moved from per-authority zips + Basic auth to one national archive per period +
+  Bearer auth. The ingestion layer absorbs this without touching downstream code.
+- **Loading a warehouse from a source with no reliable typing.** Raw EPC exports
+  contain `'NO DATA!'`, `'INVALID!'`, and inconsistent dates. The Snowflake raw
+  layer loads everything as STRING and preserves sentinels rather than coercing
+  them to NULL, so the distinction between "surveyor recorded nothing" and "field
+  absent" isn't destroyed at load time. Loads are verified with row-count
+  reconciliation, not by trusting a zero exit code.
+- **Confounded time trends.** New-build share per LA-year is included as a
+  covariate because high-construction years mechanically raise mean EPC scores
+  — without it, policy effects would be conflated with compositional shift.
+
+---
 
 ## Quickstart
 
-Install:
-
 ```bash
 pip install -r requirements.txt
-pip install -e .
+pip install -e .          # installs the `ewhei` CLI
+make ci                   # lint + format-check + 129 tests
 ```
 
-Run the quality gate:
+Explore the pipeline without downloading any data or holding credentials:
 
 ```bash
-make ci
+ewhei orchestrate --dry-run     # print the 11-task Prefect plan
+ewhei monitor --dry-run         # planned drift-report inputs/outputs
+ewhei db-load --dry-run         # planned analytical table loads
+ewhei ingest --dry-run          # planned S3 keys and expected row counts
 ```
 
-Inspect the orchestrated pipeline without downloading EPC data:
+Run the API against generated artifacts:
 
 ```bash
-ewhei orchestrate --dry-run
-```
-
-Preview monitoring and database loads without heavy inputs:
-
-```bash
-ewhei monitor --dry-run
-ewhei db-load --dry-run
-```
-
-## Demo Commands Without EPC Credentials
-
-These commands work as smoke/demo commands and do not require EPC API credentials
-or full EPC data:
-
-```bash
-make smoke
-make demo-dry-run
-PYTHONPATH=src:. python -m ew_housing_energy_impact --help
-PYTHONPATH=src:. python -m ew_housing_energy_impact orchestrate --dry-run
-PYTHONPATH=src:. python -m ew_housing_energy_impact monitor --dry-run
-PYTHONPATH=src:. python -m ew_housing_energy_impact db-load --dry-run
-```
-
-Start the API:
-
-```bash
-make api
-```
-
-or:
-
-```bash
-uvicorn api:app --reload --port 8000
-```
-
-The API returns clear empty states for optional artifacts that have not been
-generated yet.
-
-## API Examples
-
-```bash
+make api                        # uvicorn api:app --reload --port 8000
 curl http://localhost:8000/health
-curl http://localhost:8000/metadata
-curl http://localhost:8000/authorities
-curl "http://localhost:8000/authority/Devon/summary"
-curl http://localhost:8000/trends
 curl http://localhost:8000/policy-summary
-curl http://localhost:8000/validation/latest
-curl "http://localhost:8000/artifacts?limit=25"
 curl http://localhost:8000/model/metadata
-curl http://localhost:8000/drift/latest
-curl http://localhost:8000/retraining/status
 ```
 
-See [docs/api.md](docs/api.md) for endpoint behavior, DB vs CSV fallback, and
-empty-state examples.
+The full command list: `make smoke`, `make test`, `make lint`, `make format`,
+`make validate`.
 
-## Full Pipeline Commands
+---
 
-Add EPC API credentials to `.env` only when running real ingestion:
+## Running the full pipeline
+
+Requires an `EPC_BEARER_TOKEN` in `.env` (free registration at
+`get-energy-performance-data.communities.gov.uk`):
 
 ```bash
-EPC_EMAIL=you@example.com
-EPC_API_KEY=your_key_here
+ewhei download           # one national archive per period, ~2.9 GB compressed
+ewhei clean               # SW filter, geography rollup, standardise fields
+ewhei features             # impute, policy periods, new-build share, log floor area
+ewhei eda                  # EDA figures and tables
+ewhei fe                    # fixed-effects models, wild cluster bootstrap, event study
+ewhei train                  # XGBoost + SHAP
+ewhei validate                # schema/range checks
+ewhei manifest                 # dataset manifest
 ```
 
-Run stages:
+Or run everything through Prefect: `ewhei orchestrate`.
+
+Warehouse path (S3 → Snowflake, needs `EPC_S3_BUCKET` and Snowflake credentials):
 
 ```bash
-ewhei download --mode la
-ewhei clean
-ewhei features
-ewhei eda
-ewhei fe
-ewhei train
-ewhei validate
-ewhei manifest
+ewhei ingest --dry-run
+ewhei ingest
 ```
 
-Run everything through the original CLI path:
+## Optional services
 
 ```bash
-ewhei run-all --mode la
-```
-
-Run through Prefect:
-
-```bash
-ewhei orchestrate --mode la
-```
-
-## Optional Services
-
-PostgreSQL analytical layer:
-
-```bash
+# PostgreSQL analytical layer
 docker compose up -d postgres
 DATABASE_URL=postgresql+psycopg://epc:epc@localhost:5432/epc ewhei db-init
 DATABASE_URL=postgresql+psycopg://epc:epc@localhost:5432/epc ewhei db-load
-```
 
-MLflow tracking:
-
-```bash
+# MLflow experiment tracking
 docker compose up -d mlflow
-ENABLE_MLFLOW=true \
-MLFLOW_TRACKING_URI=http://localhost:5000 \
-ewhei train
-```
+ENABLE_MLFLOW=true MLFLOW_TRACKING_URI=http://localhost:5000 ewhei train
 
-Streamlit dashboard:
-
-```bash
+# Streamlit dashboard
 streamlit run app.py
 ```
 
-## Testing And CI
+Every optional integration degrades to a CSV/artifact fallback rather than
+raising — this is enforced by tests, not just a design intention.
 
-Local checks:
+---
+
+## Testing & CI
 
 ```bash
-make lint
-make format-check
-make test
-make ci
+make ci     # ruff check . && ruff format --check . && pytest -q
 ```
 
-CI runs Ruff linting, Ruff format checks, and pytest. Tests use synthetic data,
-SQLite, mocks, and dry-runs; they do not download full EPC data or require live
-Postgres/MLflow.
+129 tests, all offline: synthetic fixtures, SQLite in place of Postgres, mocked
+`boto3`/`snowflake.connector`/HTTP for the ingestion path. GitHub Actions runs
+the same gate on every push/PR to `main` (Python 3.11).
 
-## Key Technical Talking Points
+| Coverage area | File |
+|---|---|
+| Policy-period boundary logic | `test_policy.py` |
+| Schema/range validation | `test_validation.py` |
+| Local authority → analysis group rollup | `test_geography.py` |
+| DB models, loaders, queries | `test_db.py` |
+| FastAPI routes incl. DB-unavailable fallback | `test_api_database.py` |
+| MLflow no-op-when-disabled helpers | `test_mlflow_tracking.py` |
+| Drift metrics, retraining recommendation | `test_monitoring.py` |
+| Prefect task/flow wiring | `test_orchestration.py` |
+| Bearer auth, zip validation, period parsing | `test_epc_source.py` |
+| S3 key construction, MD5 skip-unchanged | `test_s3_upload.py` |
+| Snowflake DDL, COPY INTO, row reconciliation | `test_load.py` |
+| End-to-end ingestion wiring (fake clients) | `test_ingestion_pipeline.py` |
 
-- Correct geography: lower-tier/unitary EPC files are downloaded and rolled into
-  14 stable South West analysis authorities.
-- Leakage-safe ML: train/test split uses `BUILDING_REFERENCE_NUMBER` so repeated
-  certificates for the same dwelling do not leak across splits.
-- Reproducibility: validation reports, manifests, model cards, and artifact
-  registry hashes make outputs auditable.
-- Production shape: Prefect, optional Postgres, optional MLflow, FastAPI,
-  Streamlit, CI, and monitoring are added without making local development heavy.
-- Honest monitoring: drift checks produce a retraining recommendation only; they
-  do not retrain or deploy models automatically.
+A green test suite doesn't alone prove `ewhei` works as an installed CLI — see
+`make smoke` for that check, run separately in CI.
 
-## Limitations
+---
 
-- EPC certificates are lodgement/event records, not a perfect annual stock census.
-- Policy-period modelling is observational and should not be sold as conclusive
-  causal inference.
-- Optional PostgreSQL stores analytical summaries, not the full raw EPC warehouse.
-- MLflow tracking is optional; model registry promotion is future work.
-- Monitoring is threshold based; richer statistical tests and scheduled alerts are
-  future work.
-- API authentication, pagination, and prediction endpoints are not implemented yet.
+## Repository map
 
-## Resume Bullet Examples
+```
+config.py                     # paths, geography maps, band/fuel/tenure lookups
+scripts/pipeline/              # download, clean, features, EDA, FE models, ML, quality
+src/ew_housing_energy_impact/
+  cli.py                        # ewhei entry point
+  ingestion/                     # EPC source, S3 upload, Snowflake load, pipeline wiring
+  orchestration/                  # Prefect flow + task wrappers
+  db/                               # SQLAlchemy models, loaders, queries
+  ml/tracking.py                    # MLflow wrappers, no-op when disabled
+  monitoring/                        # drift detection, retraining recommendation
+api.py                          # FastAPI, 11 routes, DB-with-CSV fallback
+app.py                          # Streamlit dashboard
+snowflake/                      # one-time warehouse + IAM setup SQL
+tests/                          # 129 tests, fully offline
+```
 
-- Built a reproducible Python data/ML platform for UK EPC housing-energy analysis,
-  covering ingestion, cleaning, feature engineering, fixed-effects analytics, ML
-  training, monitoring, API serving, and CI.
-- Added production-style platform layers around an analytics pipeline: Prefect
-  orchestration, optional PostgreSQL summaries, optional MLflow tracking,
-  FastAPI endpoints, artifact registry, and drift-based retraining
-  recommendations.
-- Prevented common analytical errors by preserving raw authority identifiers,
-  rolling EPC lower-tier geographies into stable analysis groups, and using
-  property-level ML splits to reduce leakage.
+~6,200 lines of pipeline/application Python across `src/` and `scripts/`.
 
-## More Docs
+---
 
-- [docs/demo_script.md](docs/demo_script.md)
-- [docs/resume_bullets.md](docs/resume_bullets.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/api.md](docs/api.md)
-- [docs/orchestration.md](docs/orchestration.md)
-- [docs/database.md](docs/database.md)
-- [docs/mlflow.md](docs/mlflow.md)
-- [docs/monitoring.md](docs/monitoring.md)
+## Honest limitations
+
+Stated up front because pretending otherwise would undercut the rest of this:
+
+- EPC certificates are lodgement/event records, not a complete annual stock
+  census — policy-period comparisons are observational, not a definitive causal
+  DiD claim.
+- PostgreSQL stores analytical summaries, not the full raw EPC warehouse; that's
+  what the Snowflake raw layer is for.
+- MLflow model registry promotion isn't implemented — tracking only.
+- Drift monitoring is threshold-based; it recommends retraining, it doesn't
+  trigger it.
+- The API has no authentication, no pagination, and no live prediction endpoint
+  yet.
+
+## Further documentation
+
+- [docs/architecture.md](docs/architecture.md) — design decisions and rationale
+- [docs/ingestion.md](docs/ingestion.md) — S3/Snowflake warehouse path, failure modes
+- [docs/api.md](docs/api.md) — endpoint behavior, DB vs CSV fallback
+- [docs/orchestration.md](docs/orchestration.md) · [docs/database.md](docs/database.md) · [docs/mlflow.md](docs/mlflow.md) · [docs/monitoring.md](docs/monitoring.md)
+- [docs/interview_guide.md](docs/interview_guide.md) — talking points and hardest technical challenges

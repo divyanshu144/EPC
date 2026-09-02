@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -137,10 +138,35 @@ def _csv_exists() -> bool:
     return DATA_PATH.exists()
 
 
+def _data_signature() -> tuple[float, int] | None:
+    """(mtime, size) of the feature CSV, or None if absent.
+
+    Used as the cache key below so the cache invalidates when a pipeline re-run
+    rewrites the file inside a long-lived process, rather than serving a stale
+    column set for the life of the server.
+    """
+    try:
+        stat = DATA_PATH.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime, stat.st_size)
+
+
+@lru_cache(maxsize=4)
+def _csv_columns_for(signature: tuple[float, int] | None) -> frozenset[str]:
+    if signature is None:
+        return frozenset()
+    return frozenset(pd.read_csv(DATA_PATH, nrows=0).columns)
+
+
 def _csv_columns() -> set[str]:
-    if not DATA_PATH.exists():
-        return set()
-    return set(pd.read_csv(DATA_PATH, nrows=0).columns)
+    """Column names of the feature CSV.
+
+    Previously this re-opened a 56 MB file on every call, and every request
+    called it more than once. The result is cached on (mtime, size) so repeated
+    requests cost nothing while a rewritten file still invalidates.
+    """
+    return set(_csv_columns_for(_data_signature()))
 
 
 def _authority_column(columns: set[str]) -> str | None:
@@ -156,6 +182,16 @@ def _read_feature_csv(usecols: list[str] | None = None) -> pd.DataFrame:
     available = _csv_columns()
     if usecols is not None:
         safe_usecols = [column for column in usecols if column in available]
+        if not safe_usecols:
+            # pd.read_csv(usecols=[]) returns a (0, 0) frame, so a mistyped column
+            # name previously surfaced as "no data" rather than as an error.
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "None of the requested columns exist in the dataset: "
+                    f"{sorted(usecols)}. Available: {sorted(available)}"
+                ),
+            )
         return pd.read_csv(DATA_PATH, usecols=safe_usecols)
     return pd.read_csv(DATA_PATH)
 

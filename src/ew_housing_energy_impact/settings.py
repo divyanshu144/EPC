@@ -38,6 +38,9 @@ class Settings:
     enable_mlflow: bool
     mlflow_tracking_uri: str
     mlflow_experiment_name: str
+    epc_bearer_token: str
+    aws_account_id: str
+    s3_bucket: str
 
 
 def get_settings() -> Settings:
@@ -49,4 +52,7 @@ def get_settings() -> Settings:
         enable_mlflow=_env_bool("ENABLE_MLFLOW", default=False),
         mlflow_tracking_uri=os.getenv("MLFLOW_TRACKING_URI", default_mlflow_tracking_uri()),
         mlflow_experiment_name=os.getenv("MLFLOW_EXPERIMENT_NAME", "epc-housing-energy"),
+        epc_bearer_token=os.getenv("EPC_BEARER_TOKEN", ""),
+        aws_account_id=os.getenv("AWS_ACCOUNT_ID", ""),
+        s3_bucket=os.getenv("EPC_S3_BUCKET", "epc-sw-pipeline-dev"),
     )

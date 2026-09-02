@@ -135,7 +135,32 @@ def sample_data(
 
 
 def build_preprocessor(cat_features: list[str], num_features: list[str]) -> ColumnTransformer:
-    categorical_transformer = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    """Build the modelling design matrix.
+
+    ``drop="first"`` is load-bearing, not cosmetic. Without it each one-hot block
+    sums to 1, so the blocks are mutually collinear and collinear with the
+    intercept — with four categorical features the design matrix was rank 44 of
+    47 columns. ``LinearRegression`` solves such a system by least squares and
+    returns the minimum-norm solution, whose coefficients (observed: 3.4e11)
+    cancel exactly on rows where every block sums to 1, but not otherwise.
+
+    Three of 25,032 test rows carried an ``AGE_BAND_STD`` value unseen in
+    training. Under ``handle_unknown="ignore"`` their block encodes as all zeros,
+    breaking that cancellation and predicting 4.07e10 against actuals near 50-90
+    — enough to drive reported R2 to -1.13e15. Ridge and Lasso were unaffected
+    only because regularisation suppresses the null-space directions; the design
+    was equally degenerate for them.
+
+    Trade-off worth knowing: with a level dropped, an unseen category still
+    encodes as all zeros, which is now indistinguishable from the dropped
+    reference level. An unknown value is therefore silently treated as the
+    reference category rather than exploding. That is bounded and sane, but it is
+    a substitution, not detection — if unseen categories become common, encode
+    them explicitly instead.
+    """
+    categorical_transformer = OneHotEncoder(
+        handle_unknown="ignore", sparse_output=False, drop="first"
+    )
     numeric_transformer = StandardScaler()
     return ColumnTransformer(
         transformers=[

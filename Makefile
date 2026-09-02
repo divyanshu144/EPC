@@ -49,3 +49,10 @@ smoke:
 	PYTHONPATH=src:. python -m ew_housing_energy_impact orchestrate --dry-run
 	PYTHONPATH=src:. python -m ew_housing_energy_impact monitor --dry-run
 	PYTHONPATH=src:. python -m ew_housing_energy_impact db-load --dry-run
+	PYTHONPATH=src:. python -m ew_housing_energy_impact ingest --dry-run
+
+snowflake-sql:
+	@test -n "$$AWS_ACCOUNT_ID" || { echo "Set AWS_ACCOUNT_ID (12-digit AWS account id) first"; exit 1; }
+	@python3 -c "import os,sys,pathlib; \
+p=pathlib.Path('snowflake/02_storage_integration.sql'); \
+sys.stdout.write(p.read_text().replace('\$${AWS_ACCOUNT_ID}', os.environ['AWS_ACCOUNT_ID']))"

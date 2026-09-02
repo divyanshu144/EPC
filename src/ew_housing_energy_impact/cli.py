@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from ew_housing_energy_impact.paths import repo_root
@@ -114,6 +115,82 @@ def cmd_db_load(dry_run: bool = False) -> None:
     setup_logger().info("Database load result: %s", result)
 
 
+_SNOWFLAKE_ENV_VARS = ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD")
+
+
+def _require_snowflake_credentials() -> dict[str, str]:
+    """Snowflake connect() kwargs from the environment, or a clear ValueError.
+
+    Mirrors epc_source.auth_headers(): reading os.environ[...] directly would
+    surface a missing variable as an opaque KeyError from inside connect().
+    Checking all three up front names every missing one in a single message.
+    """
+    missing = [name for name in _SNOWFLAKE_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        raise ValueError(
+            f"Missing Snowflake credentials: {', '.join(missing)} — set them in the "
+            "environment before running `ewhei ingest`."
+        )
+    return {
+        name.lower().removeprefix("snowflake_"): os.environ[name] for name in _SNOWFLAKE_ENV_VARS
+    }
+
+
+def cmd_ingest(dry_run: bool = False, allow_schema_change: bool = False) -> None:
+    from ew_housing_energy_impact.ingestion.epc_source import iter_extracted_sources
+    from ew_housing_energy_impact.ingestion.pipeline import run_ingest
+    from ew_housing_energy_impact.settings import get_settings
+
+    settings = get_settings()
+    sources = iter_extracted_sources()
+
+    if dry_run:
+        result = run_ingest(None, None, settings.s3_bucket, sources, dry_run=True)
+    else:
+        import boto3
+        import snowflake.connector
+        from botocore.config import Config
+
+        credentials = _require_snowflake_credentials()
+
+        # Spec section 6: 3 attempts with exponential backoff on transient S3
+        # errors. botocore's standard retry mode implements exactly that, so
+        # configure it rather than hand-rolling a loop around upload_file.
+        s3_config = Config(retries={"max_attempts": 3, "mode": "standard"})
+
+        # autocommit=True is passed explicitly (it is Snowflake's session
+        # default) so the semantics at this call site are honest: DDL
+        # (TRUNCATE, CREATE) commits implicitly regardless of session mode,
+        # so there was never a transaction here for a trailing commit() to
+        # close. The load is NOT atomic across kinds — if certificates load
+        # and recommendations then fail, or reconcile() fails after both,
+        # raw is left partially refreshed with no rollback available.
+        # Recovery is to fix the cause and re-run: safe, because load_kind's
+        # TRUNCATE + COPY makes each kind's load a full refresh.
+        connection = snowflake.connector.connect(
+            **credentials,
+            warehouse="epc_wh",
+            database="epc",
+            schema="raw",
+            role="epc_dbt_role",
+            autocommit=True,
+        )
+        cursor = connection.cursor()
+        try:
+            result = run_ingest(
+                boto3.client("s3", config=s3_config),
+                cursor,
+                settings.s3_bucket,
+                sources,
+                allow_schema_change=allow_schema_change,
+            )
+        finally:
+            cursor.close()
+            connection.close()
+
+    setup_logger().info("Ingest result: %s", result)
+
+
 def cmd_mlflow_info() -> None:
     from ew_housing_energy_impact.ml.tracking import is_mlflow_enabled
     from ew_housing_energy_impact.settings import get_settings
@@ -147,8 +224,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     _MODE_HELP = (
-        "'la' (default): download only SW LA zips (~200 MB). "
-        "'year': full annual E&W bulk zips (~6.7 GB)."
+        "Retained for backward compatibility only. The EPC API now serves one "
+        "national archive per period rather than per-authority zips, so this no "
+        "longer changes what is downloaded. Slated for removal in Phase C."
     )
     run_all = sub.add_parser("run-all", help="Run the full report pipeline")
     run_all.add_argument("--mode", choices=["la", "year"], default="la", help=_MODE_HELP)
@@ -187,6 +265,17 @@ def main() -> None:
         "--dry-run",
         action="store_true",
         help="Print planned table loads without modifying the database",
+    )
+    ingest = sub.add_parser("ingest", help="Upload EPC sources to S3 and load Snowflake raw")
+    ingest.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned uploads and expected row counts without touching S3 or Snowflake",
+    )
+    ingest.add_argument(
+        "--allow-schema-change",
+        action="store_true",
+        help="Accept a changed source header instead of failing",
     )
     orchestrate = sub.add_parser("orchestrate", help="Run the Prefect-orchestrated pipeline")
     orchestrate.add_argument("--mode", choices=["la", "year"], default="la", help=_MODE_HELP)
@@ -270,6 +359,8 @@ def main() -> None:
         cmd_db_init()
     elif args.cmd == "db-load":
         cmd_db_load(dry_run=args.dry_run)
+    elif args.cmd == "ingest":
+        cmd_ingest(dry_run=args.dry_run, allow_schema_change=args.allow_schema_change)
     elif args.cmd == "mlflow-info":
         cmd_mlflow_info()
 

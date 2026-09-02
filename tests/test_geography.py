@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 import config
-from scripts.pipeline import epc_download_merge_fast as dl
+from ew_housing_energy_impact.ingestion import epc_source as dl  # noqa: F401
 from scripts.pipeline.clean_epc import clean_chunk
 
 # --------------------------------------------------------------------------- #
@@ -81,23 +81,6 @@ def test_non_south_west_returns_none():
 # --------------------------------------------------------------------------- #
 # Download selection
 # --------------------------------------------------------------------------- #
-
-
-def test_pick_la_files_selects_by_district_code():
-    files = {
-        "domestic-E07000041-Exeter.zip": {},  # Devon district
-        "domestic-E07000078-Cheltenham.zip": {},  # Glos district
-        "domestic-E06000023-Bristol-City-of.zip": {},  # unitary
-        "domestic-E10000008-Devon.zip": {},  # county -> must NOT match
-        "non-domestic-E06000023.zip": {},  # wrong prefix
-        "readme.txt": {},
-    }
-    picked = dl.pick_la_files(files)
-    assert "domestic-E07000041-Exeter.zip" in picked
-    assert "domestic-E07000078-Cheltenham.zip" in picked
-    assert "domestic-E06000023-Bristol-City-of.zip" in picked
-    assert "domestic-E10000008-Devon.zip" not in picked
-    assert "non-domestic-E06000023.zip" not in picked
 
 
 def test_missing_analysis_authorities_detection():
