@@ -1,3 +1,45 @@
+# Verification checkpoint — 2026-10-25
+
+## Current State
+
+All pending release, benchmark, research-serving, documentation, and dissertation
+changes are being committed together at the user's request on `chore/remove-video-md`.
+The historical handoff below is superseded by this checkpoint and
+`docs/AGENT_HANDOFF.md` for the newer benchmark work.
+
+## Verification Baseline
+
+- `make ci`: passed (Ruff lint, formatting of 83 Python files, full pytest suite).
+- `make smoke`: passed (CLI help and orchestration, monitoring, database-load,
+  ingestion dry runs). Ingestion enumerated 30,153,553 local source records.
+- Installed `ewhei train --help` and `ewhei legacy-train --help`: passed.
+- `git diff --check`: passed.
+- The first sandboxed run failed four Prefect tests and orchestration smoke because
+  SQLite could not access `~/.prefect/prefect.db`; the approved unrestricted reruns
+  passed without code changes. Dependency deprecation warnings remain.
+- Tests include real local MLflow persistence, fitted-model verification, API
+  predictions, and tamper rejection. Live cloud ingestion and a full-scale model
+  retraining were not run in this checkpoint. `fast_wcb.py` remains an experimental
+  draft without statistical equivalence validation.
+
+## Next Action
+
+Commit and push this verified working tree to the existing origin branch.
+GitHub CI runs on main pushes or pull requests targeting main; a feature-branch
+push alone does not establish remote CI success.
+
+## In-Flight Files
+
+All pending files are included in this commit; ignored datasets and local settings
+remain governed by `.gitignore`.
+
+## Open Questions
+
+Existing benchmark reproducibility and live-service limitations remain documented
+in `docs/claim-evidence-ledger.md` and `docs/AGENT_HANDOFF.md`.
+
+---
+
 # HANDOFF
 
 Written so a cold-start session can resume without re-deriving context.

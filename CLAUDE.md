@@ -5,11 +5,14 @@
 Reproducible academic pipeline for the dissertation:
 **"The Impact of Energy Policy on Housing Energy Performance in the South West of England (2008–2025)"**
 
-Analyses ~1.8 M domestic EPC lodgements across 14 South West local authorities using:
+Analyses a versioned release of 2,776,781 domestic EPC certificates (2008–2025, built from 30,153,553
+national records) across 14 South West local authorities. The older "~1.8 M" figure was never
+substantiated — do not reuse it. Methods:
 - Fixed-effects panel OLS (`linearmodels.PanelOLS`, indexed on `[LOCAL_AUTHORITY, YEAR]`)
 - Wild cluster bootstrap for inference (14 clusters — too few for standard asymptotic clustered SEs)
 - Year-by-year event study alongside five blunt policy-period dummies
-- Gradient-boosted regression (XGBoost) with SHAP explainability
+- Property-grouped benchmark (`ewhei train`): tuned MLP / GBR regression and XGBoost classification vs
+  linear/logistic/dummy baselines, with MLflow lineage, bootstrap CIs, SHAP and model cards
 - PCA + KMeans clustering of LA random effects
 
 The package is installed as `ew-housing-energy-impact` (editable). The CLI entry point is `ewhei`.
@@ -52,7 +55,7 @@ ewhei clean             # Filter to SW LAs, standardise fields, derive YEAR
 ewhei features          # Impute, add LOG_FLOOR_AREA, POLICY_PERIOD, NEW_BUILD_SHARE
 ewhei eda               # EDA figures and tables -> reports/
 ewhei fe                # Fixed-effects models + event study + clustering -> reports/artifacts/
-ewhei train             # GBR predictive model + SHAP -> reports/artifacts/
+ewhei train --release <dir> --output <new-run-dir>   # versioned property/chronological benchmark
 ewhei quality           # HTML data quality report -> reports/artifacts/
 ewhei validate          # Schema / range checks -> reports/artifacts/validation_report.json
 ewhei manifest          # Data manifest -> reports/artifacts/data_manifest.json
@@ -67,7 +70,7 @@ ewhei monitor                 # Drift report -> reports/artifacts/drift_report.{
 ewhei db-init                 # Create analytical tables (SQLite default)
 ewhei db-load --dry-run       # Print planned table loads
 ewhei mlflow-info             # Show MLflow config and whether tracking is enabled
-ewhei train --track           # Force-enable MLflow for one training run
+ewhei legacy-train --track    # Historical path (train_models.py); not for new benchmark claims
 ewhei ingest --dry-run        # Planned S3 keys and expected row counts, no network calls
 ewhei ingest                  # Upload extracted EPC sources to S3, load Snowflake raw, reconcile
 ```
@@ -126,7 +129,14 @@ scripts/pipeline/
   build_features.py                    # Impute, LOG_FLOOR_AREA, NEW_BUILD_SHARE, POLICY_PERIOD
   report_eda.py                        # EDA figures and summary tables
   run_did.py                           # FE models, WCB, event study, clustering
-  train_models.py                      # XGBoost + SHAP + PCA clustering
+  train_models.py                      # LEGACY XGBoost + SHAP + PCA clustering (ewhei legacy-train)
+  build_release.py                     # Versioned release: source hashes, dedup, reconciled exclusions
+  verify_release.py                    # Independent release verifier
+  benchmark_release.py                 # Property/chronological benchmark, MLflow, bootstrap (ewhei train)
+  verify_benchmark.py                  # Independent re-check: reloads models, recomputes metrics
+  report_benchmark.py                  # Model cards, permutation importance, SHAP
+  compare_benchmarks.py                # Reproduction check, fixed rtol=atol=1e-8, never auto-loosened
+  fast_wcb.py                          # UNTRACKED/untested draft; no measured speedup — do not quote
   quality_report.py                    # HTML data quality report
 src/ew_housing_energy_impact/
   cli.py                               # ewhei CLI (argparse, delegates to scripts)
@@ -150,6 +160,8 @@ src/ew_housing_energy_impact/
     loaders.py                         # refresh_analytics_database() + per-table loaders
     queries.py                         # Read helpers used by api.py
   ml/
+    evaluation.py                      # Property-separated splits, grouped folds, preprocessing
+    serving.py                         # FastAPI prediction service for verified runs
     tracking.py                        # MLflow wrappers — all *_safe, no-op when disabled
   monitoring/
     drift.py                           # build_drift_report(), TVD + numeric/categorical drift
@@ -210,16 +222,29 @@ degrade, never raise.
 ### NEW_BUILD_SHARE covariate
 Fraction of EPC lodgements flagged `TRANSACTION_TYPE == 'new dwelling'` per LA-year. Controls for the compositional shift that mechanically raises mean EPC scores in high-construction years. Computed in `build_features.py:add_new_build_share()` and included in both `BASE_RHS` and `EVENT_STUDY_RHS`.
 
-### ML train/test split
-Split is by `BUILDING_REFERENCE_NUMBER` (property level), not by row. This prevents the same physical property appearing in both train and test sets — a data leakage risk when the same address is re-lodged across years.
+### ML evaluation design
+Splits are by property, never by row. `ml/evaluation.py` separates train/validation/test on
+the identified property key (zero overlap, asserted) and tunes with `GroupKFold`. Rows without a
+usable property ID (70,293) are excluded from the grouped benchmarks. The `chronological`
+strategy trains before 2024, validates on 2024, tests on 2025, and purges earlier records of
+held-out properties. Imputation lives inside the sklearn Pipeline (fold-local); missing floor
+area stays missing in the release. Training + validation are capped at 250,000 rows; test is
+uncapped (541,309 rows / 380,723 properties). Selection: min validation RMSE / max validation AUC.
 
----
+### Verified results (property-v1; re-check `reports/benchmarks/` before quoting)
+Regression MLP_tuned RMSE 9.429 vs LinearRegression 9.985. Classification XGBoost ROC-AUC 0.8858 vs
+LogisticRegression 0.8784. 2025 chronological: 9.757 vs 10.212 RMSE, 0.8508 vs 0.8456 AUC.
+Claim boundaries live in `docs/claim-evidence-ledger.md` — read it before writing any claim.
+Not claimable: causal policy effects (policy bootstrap p-values blank), production deployment,
+live S3/Snowflake execution, remote CI success. Clean-environment rerun: splits, selection and
+selected-model predictions bit-identical; two LogisticRegression baseline metrics differ by up
+to 8.8e-7 and FAIL the fixed 1e-8 tolerance. Never loosen it silently.
 
 ## Testing
 
 ```bash
 make ci                 # lint + format-check + test — the full gate, mirrors GitHub Actions
-python -m pytest -q     # 129 tests
+python -m pytest -q     # 257 tests (last full run, 0 failures)
 ```
 
 | File | Covers |
@@ -237,6 +262,9 @@ python -m pytest -q     # 129 tests
 | `test_load.py` | Raw DDL generation, `COPY INTO` generation, quote-aware row counting, header-diff detection, reconciliation — fake cursor |
 | `test_ingestion_pipeline.py` | `run_ingest()` wiring, stage preflight, post-load authority coverage — fake clients |
 | `test_cli.py` | `_require_snowflake_credentials()` — named errors on missing env vars |
+| `test_release.py` | Release build: dedup, reconciled exclusions, early-year retention |
+| `test_evaluation.py` | Property-separated splits, grouped folds, fold-local imputation |
+| `test_benchmark_release.py` | Benchmark runner, MLflow integration, serving HTTP checks |
 
 All ingestion tests are offline (mocked HTTP, fake boto3/cursor). They prove the logic is
 internally consistent; they do not prove a real Snowflake account or S3 bucket behaves as
@@ -394,7 +422,7 @@ diverge, the working tree is authoritative.**
 
 A task is not complete until all of the following hold:
 
-1. `make ci` passes — lint, format-check, and tests (currently **129 passing**).
+1. `make ci` passes — lint, format-check, and tests (last full run: **257 passing** — recount with `pytest --collect-only -q` before quoting).
 2. `make smoke` passes if the CLI surface changed.
 3. New logic has tests.
 4. `HANDOFF.md` reflects the current state.

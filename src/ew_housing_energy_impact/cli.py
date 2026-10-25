@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from ew_housing_energy_impact.paths import repo_root
 
@@ -236,8 +237,17 @@ def main() -> None:
     sub.add_parser("features", help="Build features and policy periods")
     sub.add_parser("eda", help="Generate EDA figures and tables")
     sub.add_parser("fe", help="Run fixed-effects and clustering analysis")
-    train = sub.add_parser("train", help="Run predictive modelling")
-    train.add_argument(
+    train = sub.add_parser("train", help="Run the versioned property-aware benchmark")
+    train.add_argument("--release", type=Path, required=True)
+    train.add_argument("--output", type=Path, required=True, help="New run directory")
+    train.add_argument("--strategy", choices=["property", "chronological"], default="property")
+    train.add_argument("--train-cap", type=int, default=200000)
+    train.add_argument("--validation-cap", type=int, default=50000)
+    train.add_argument("--bootstrap", type=int, default=500)
+    legacy_train = sub.add_parser(
+        "legacy-train", help="Historical modelling path; unsuitable for new benchmark claims"
+    )
+    legacy_train.add_argument(
         "--track",
         action="store_true",
         help="Force-enable MLflow tracking for this training run",
@@ -326,6 +336,17 @@ def main() -> None:
 
         run_did.main()
     elif args.cmd == "train":
+        from scripts.pipeline.benchmark_release import run_benchmark
+
+        run_benchmark(
+            release=args.release,
+            output=args.output,
+            strategy=args.strategy,
+            train_cap=args.train_cap,
+            validation_cap=args.validation_cap,
+            bootstrap=args.bootstrap,
+        )
+    elif args.cmd == "legacy-train":
         from scripts.pipeline import train_models
 
         train_models.main(track=args.track or None)
