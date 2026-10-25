@@ -3,7 +3,7 @@ pandas==2.2.2
 numpy==2.1.2
 pyarrow==18.1.0
 python-dotenv==1.0.1
-requests==2.32.3
+requests==2.32.4
 tqdm==4.66.5
 
 # viz + analysis
