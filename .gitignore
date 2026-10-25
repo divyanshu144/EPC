@@ -24,3 +24,6 @@ logs/**
 .vscode/
 # Python packaging
 *.egg-info/
+
+# local-only notes, never pushed
+video.md

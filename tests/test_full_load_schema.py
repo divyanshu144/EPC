@@ -32,6 +32,12 @@ from scripts.pipeline.schemas import CORE_COLS
 
 
 class TestColumnResolution:
+    def test_legacy_identifiers_are_resolved(self):
+        columns = ["LMK_KEY", "BUILDING_REFERENCE_NUMBER"]
+        usecols, rename_map = resolve_usecols(columns, columns)
+        assert usecols == columns
+        assert rename_map == {column: column for column in columns}
+
     def test_every_core_col_resolves_or_is_known_absent(self):
         yearly = [c.lower() for c in _yearly_header()]
         for column in CORE_COLS:

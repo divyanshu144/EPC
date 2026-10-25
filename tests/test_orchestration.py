@@ -77,10 +77,10 @@ def test_cli_exposes_orchestrate_help(monkeypatch, capsys):
     assert "--skip-monitoring" in captured.out
 
 
-def test_cli_exposes_train_tracking_and_mlflow_info(monkeypatch, capsys):
+def test_cli_exposes_legacy_tracking_and_mlflow_info(monkeypatch, capsys):
     from ew_housing_energy_impact import cli
 
-    monkeypatch.setattr(sys, "argv", ["ewhei", "train", "--help"])
+    monkeypatch.setattr(sys, "argv", ["ewhei", "legacy-train", "--help"])
     with pytest.raises(SystemExit) as exc:
         cli.main()
 

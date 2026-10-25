@@ -66,7 +66,7 @@ def resolve_usecols(wanted: list[str], header: list[str]) -> tuple[list[str], di
     rename_map: dict[str, str] = {}
     for canonical in wanted:
         source = FULL_LOAD_RENAMES.get(canonical, canonical).lower()
-        actual = available.get(source)
+        actual = available.get(source) or available.get(canonical.lower())
         if actual is None:
             continue
         usecols.append(actual)
